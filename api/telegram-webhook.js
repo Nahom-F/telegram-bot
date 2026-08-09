@@ -15,11 +15,6 @@
 //   TELEGRAM_WEBHOOK_SECRET  any random string you make up — verifies
 //                             incoming requests really came from Telegram
 //
-// Optional:
-//   POLLINATIONS_API_KEY     free key from enter.pollinations.ai — not
-//                             required, but avoids shared per-IP rate limits
-//                             if /image gets used a lot
-//
 // Commands:
 //   /start           intro message
 //   /image <prompt>  generates an image via Pollinations.ai (also /img)
@@ -32,7 +27,6 @@ const AUTHORIZED_CHAT_IDS = (process.env.AUTHORIZED_CHAT_IDS || "")
   .filter(Boolean);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
-const POLLINATIONS_API_KEY = process.env.POLLINATIONS_API_KEY || "";
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET;
 
 // Model IDs current as of Aug 2026 — swap if your account has different access.
@@ -53,11 +47,13 @@ async function askGemini(prompt) {
   return text;
 }
 
-// Returns a Buffer of image bytes. Pollinations.ai — free, no billing, no
-// API key required for normal use (gen.pollinations.ai, backed by Flux).
+// Returns a Buffer of image bytes. Uses Pollinations.ai's older
+// image.pollinations.ai endpoint, which — unlike the newer gen.pollinations.ai
+// unified API — still works without any API key or billing. Rate-limited to
+// roughly 1 request per 15 seconds for anonymous use, which is plenty for a
+// single-person bot.
 async function askPollinationsImage(prompt) {
-  const keyParam = POLLINATIONS_API_KEY ? `?key=${POLLINATIONS_API_KEY}` : "";
-  const url = `https://gen.pollinations.ai/image/${encodeURIComponent(prompt)}${keyParam}`;
+  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`Pollinations error ${resp.status}: ${await resp.text()}`);
   const mimeType = resp.headers.get("content-type") || "image/jpeg";
