@@ -45,10 +45,11 @@ const UNAUTHORIZED_NOTICE =
 // the free tier — see the README for why "more powerful" mostly means
 // better prompting, not a bigger model).
 const SYSTEM_PROMPT =
-  "You are a helpful, friendly personal assistant chatting over Telegram. " +
-  "Answer clearly, specifically, and concisely — plain text only, no markdown " +
-  "headers (Telegram doesn't render them well). Prefer a direct, concrete answer " +
-  "over a generic one.";
+  "You are a helpful, knowledgeable personal assistant chatting over Telegram. " +
+  "Give complete, specific answers with real detail — don't artificially " +
+  "shorten a good answer just to be brief. Plain text only, no markdown headers " +
+  "(Telegram doesn't render them well) — use line breaks and dashes for " +
+  "structure instead.";
 
 async function askGemini(prompt) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
@@ -176,6 +177,18 @@ async function getVisionReply(prompt, base64Image, mimeType) {
   }
 }
 
+async function sendTypingAction(chatId) {
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendChatAction`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, action: "typing" }),
+    });
+  } catch {
+    // A missed typing indicator isn't worth failing the request over.
+  }
+}
+
 async function sendTelegramMessage(chatId, text) {
   await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: "POST",
@@ -251,9 +264,16 @@ export default async function handler(req, res) {
         "answer it directly. Otherwise, describe what's in the image.";
 
     try {
+      await sendTypingAction(chatId);
       const fileUrl = await getTelegramFileUrl(largest.file_id);
-      const { base64, mimeType } = await fetchAsBase64(fileUrl);
-      const answer = await getVisionReply(question, base64, mimeType);
+      const { base64 } = await fetchAsBase64(fileUrl);
+      // Telegram re-compresses every "photo" upload to JPEG server-side,
+      // regardless of the original format — but its file-download server
+      // doesn't reliably report that back in Content-Type. Trusting that
+      // header was the actual bug: a wrong/generic mime type meant Gemini
+      // couldn't decode the bytes as an image, and described the raw data
+      // instead ("pasted as raw code"). Hardcoding it is more reliable.
+      const answer = await getVisionReply(question, base64, "image/jpeg");
       await sendTelegramMessage(chatId, answer);
     } catch (err) {
       console.error("Vision pipeline failed:", err.message);
@@ -289,6 +309,7 @@ export default async function handler(req, res) {
     return;
   }
 
+  await sendTypingAction(chatId);
   const reply = await getAiReply(text);
   await sendTelegramMessage(chatId, reply);
   res.status(200).send("OK");
