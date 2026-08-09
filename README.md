@@ -1,4 +1,4 @@
-# Telegram AI Bot — Gemini primary, Grok (xAI) fallback
+# Telegram AI Bot — Gemini primary, Groq fallback
 
 Runs the same way your EcoFurnish Telegram bot does: as a Vercel serverless
 function, not a program that has to stay running. Telegram sends each
@@ -18,7 +18,7 @@ restart, and no PC or laptop needs to be on.
    | `TELEGRAM_BOT_TOKEN` | your bot token from BotFather |
    | `AUTHORIZED_CHAT_IDS` | your numeric chat ID (comma-separate more if needed) |
    | `GEMINI_API_KEY` | your Gemini key |
-   | `GROK_API_KEY` | your xAI/Grok key |
+   | `GROQ_API_KEY` | your Groq key from console.groq.com (free, no card) |
    | `TELEGRAM_WEBHOOK_SECRET` | any random string you make up yourself |
 
    This is the "dedicated place for API keys" you're thinking of — Vercel
@@ -39,14 +39,28 @@ now pushes messages to your function instead of you having to poll for them.
 
 ## 3. Test
 
-Message your bot `/start`, then ask it anything.
+Message your bot `/start`, then ask it anything. Send `/image a red fox
+in a snowy forest` (or `/img ...`) and it'll reply with a generated picture
+instead of text.
+
+## Image generation
+
+- Uses Pollinations.ai's `image.pollinations.ai` endpoint — genuinely free,
+  no signup, no API key. (Pollinations also has a newer `gen.pollinations.ai`
+  unified endpoint, but that one now requires a paid API key — this bot
+  deliberately avoids it.)
+- Anonymous use is rate-limited to roughly 1 request per 15 seconds, which
+  is a non-issue for a bot only you use.
+- No fallback provider for images (Groq doesn't do image generation) — if
+  the Pollinations call fails, you'll get a text error back instead of a
+  picture.
 
 ## Notes
 
 - **Only you can use it.** The `AUTHORIZED_CHAT_IDS` check in the code
   ignores any message from a chat ID that isn't in that list — this is what
   actually keeps strangers out, not whether the bot is "discoverable."
-- **Model IDs** (`gemini-3.6-flash`, `grok-4.5`) are current as of Aug 2026.
+- **Model IDs** (`gemini-3.6-flash`, `openai/gpt-oss-120b`) are current as of Aug 2026.
   If either provider retires a model later, just change the constant near
   the top of `api/telegram-webhook.js`.
 - **No domain needed.** The free `your-project.vercel.app` address is a full
