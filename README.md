@@ -41,7 +41,24 @@ now pushes messages to your function instead of you having to poll for them.
 
 Message your bot `/start`, then ask it anything. Send `/image a red fox
 in a snowy forest` (or `/img ...`) and it'll reply with a generated picture
-instead of text.
+instead of text. Send it any photo — with or without a caption — and it'll
+analyze it (see below).
+
+## Photo / vision
+
+- Send a photo with a caption and the caption is used as your question
+  ("what's the joke in this?", "translate the sign", etc).
+- Send a photo with no caption and it defaults to: if there's a question,
+  problem, or text in the image (a homework screenshot, a quiz, a math
+  problem), read it and answer it directly — otherwise, describe the image.
+- Uses the same `GEMINI_API_KEY` you already set — Gemini's `generateContent`
+  endpoint takes text and image together in one request, so no extra key or
+  setup is needed.
+- No Groq fallback for vision specifically — Groq's only current vision
+  model is a preview model in their own docs (their previous stable one was
+  just deprecated), so failures here return a plain error message rather
+  than silently falling back to something less reliable. Text chat and
+  image *generation* both still have their normal fallbacks.
 
 ## Image generation
 
@@ -55,11 +72,32 @@ instead of text.
   the Pollinations call fails, you'll get a text error back instead of a
   picture.
 
+## How powerful is this, and can it be stronger for free?
+
+`gemini-3.6-flash` is Google's current fast-tier model — it's already the
+strongest model available on Gemini's free tier. As of April 2026, Google
+moved the Pro-tier models (the actually-stronger reasoning models) to
+paid-only, so there's no free model swap that makes this meaningfully
+smarter. What this bot does instead, for free: a `SYSTEM_PROMPT` constant
+near the top tells the model how to behave (concise, specific, plain text)
+— this doesn't make the model itself smarter, but it noticeably improves
+answer quality and consistency, at zero cost. If you want a bigger upgrade
+later, the next real lever is conversation memory (the bot currently
+treats every message independently) — that needs somewhere to store chat
+history between requests, since Vercel functions don't keep state between
+invocations. A free external store like Upstash Redis, or your existing
+EcoFurnish database if you ever merge this bot into that project, would
+both work.
+
 ## Notes
 
 - **Only you can use it.** The `AUTHORIZED_CHAT_IDS` check in the code
-  ignores any message from a chat ID that isn't in that list — this is what
-  actually keeps strangers out, not whether the bot is "discoverable."
+  replies to anyone else with a short "made by Nahom (NF), this bot is
+  private" message and stops there — no AI call, so it costs nothing even
+  if a stranger messages repeatedly.
+- **Developer credit.** Shows in the `/start` reply, and in the notice
+  unauthorized users get — so anyone who finds and starts the bot sees who
+  made it either way.
 - **Model IDs** (`gemini-3.6-flash`, `openai/gpt-oss-120b`) are current as of Aug 2026.
   If either provider retires a model later, just change the constant near
   the top of `api/telegram-webhook.js`.
