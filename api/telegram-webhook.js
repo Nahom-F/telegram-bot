@@ -1,8 +1,9 @@
 // api/telegram-webhook.js
 //
-// Telegram webhook handler — Gemini primary, Groq fallback.
-// Stateless: Vercel spins this up per incoming message, so there's no
-// "12 hour" session limit and no process to keep running. Always on.
+// Telegram webhook handler — Gemini for text (Groq fallback), Pollinations.ai
+// for images (free, no billing, no API key required). Stateless: Vercel
+// spins this up per incoming message, so there's no "12 hour" session limit
+// and no process to keep running. Always on.
 //
 // Required environment variables (set in Vercel → Project Settings →
 // Environment Variables):
@@ -10,10 +11,19 @@
 //   AUTHORIZED_CHAT_IDS      comma-separated chat IDs allowed to use the bot
 //                             (e.g. "123456789" or "123456789,987654321")
 //   GEMINI_API_KEY
-//   GROQ_API_KEY             from console.groq.com (not xAI's Grok — a
-//                             different company, free API tier, no card)
+//   GROQ_API_KEY             from console.groq.com (free API tier, no card)
 //   TELEGRAM_WEBHOOK_SECRET  any random string you make up — verifies
 //                             incoming requests really came from Telegram
+//
+// Optional:
+//   POLLINATIONS_API_KEY     free key from enter.pollinations.ai — not
+//                             required, but avoids shared per-IP rate limits
+//                             if /image gets used a lot
+//
+// Commands:
+//   /start           intro message
+//   /image <prompt>  generates an image via Pollinations.ai (also /img)
+//   anything else    normal text chat (Gemini, falls back to Groq)
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const AUTHORIZED_CHAT_IDS = (process.env.AUTHORIZED_CHAT_IDS || "")
@@ -22,11 +32,12 @@ const AUTHORIZED_CHAT_IDS = (process.env.AUTHORIZED_CHAT_IDS || "")
   .filter(Boolean);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const POLLINATIONS_API_KEY = process.env.POLLINATIONS_API_KEY || "";
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET;
 
 // Model IDs current as of Aug 2026 — swap if your account has different access.
 const GEMINI_MODEL = "gemini-3.6-flash";
-const GROQ_MODEL = "openai/gpt-oss-120b"; // Groq's current flagship open model
+const GROQ_MODEL = "openai/gpt-oss-120b"; // Groq's current flagship open model (text only)
 
 async function askGemini(prompt) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
@@ -40,6 +51,18 @@ async function askGemini(prompt) {
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error("Gemini returned no text");
   return text;
+}
+
+// Returns a Buffer of image bytes. Pollinations.ai — free, no billing, no
+// API key required for normal use (gen.pollinations.ai, backed by Flux).
+async function askPollinationsImage(prompt) {
+  const keyParam = POLLINATIONS_API_KEY ? `?key=${POLLINATIONS_API_KEY}` : "";
+  const url = `https://gen.pollinations.ai/image/${encodeURIComponent(prompt)}${keyParam}`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`Pollinations error ${resp.status}: ${await resp.text()}`);
+  const mimeType = resp.headers.get("content-type") || "image/jpeg";
+  const arrayBuffer = await resp.arrayBuffer();
+  return { buffer: Buffer.from(arrayBuffer), mimeType };
 }
 
 async function askGroq(prompt) {
@@ -83,6 +106,18 @@ async function sendTelegramMessage(chatId, text) {
   });
 }
 
+async function sendTelegramPhoto(chatId, imageBuffer, mimeType, caption) {
+  const ext = mimeType.includes("png") ? "png" : "jpg";
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  if (caption) form.append("caption", caption.slice(0, 1024));
+  form.append("photo", new Blob([imageBuffer], { type: mimeType }), `image.${ext}`);
+  await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+    method: "POST",
+    body: form,
+  });
+}
+
 export default async function handler(req, res) {
   // Anything that isn't Telegram POSTing an update (e.g. you opening the
   // URL in a browser) just gets a plain 200 so it doesn't look broken.
@@ -118,8 +153,28 @@ export default async function handler(req, res) {
   if (text === "/start") {
     await sendTelegramMessage(
       chatId,
-      "I'm online — powered by Gemini, with Groq as a fallback. Ask me anything."
+      "I'm online — Gemini for chat (Groq backup), and /image <description> for pictures."
     );
+    res.status(200).send("OK");
+    return;
+  }
+
+  const imageMatch = text.match(/^\/(image|img)\s+([\s\S]+)/i);
+  if (imageMatch) {
+    const imagePrompt = imageMatch[2].trim();
+    try {
+      const { buffer, mimeType } = await askPollinationsImage(imagePrompt);
+      await sendTelegramPhoto(chatId, buffer, mimeType, imagePrompt);
+    } catch (err) {
+      console.error("Image generation failed:", err.message);
+      await sendTelegramMessage(chatId, `⚠️ Couldn't generate that image: ${err.message}`);
+    }
+    res.status(200).send("OK");
+    return;
+  }
+
+  if (/^\/(image|img)$/i.test(text)) {
+    await sendTelegramMessage(chatId, "Send it like: /image a red fox in a snowy forest");
     res.status(200).send("OK");
     return;
   }
