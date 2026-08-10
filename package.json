@@ -1,6 +1,9 @@
 {
   "name": "telegram-ai-bot",
-  "version": "1.0.0",
+  "version": "1.7.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "mammoth": "^1.12.1"
+  }
 }
