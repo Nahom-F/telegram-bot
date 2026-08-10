@@ -24,7 +24,13 @@ restart, and no PC or laptop needs to be on.
    This is the "dedicated place for API keys" you're thinking of — Vercel
    encrypts these and only your functions can read them at runtime; they're
    never in your code or repo.
-4. Deploy. You'll get a URL like `https://your-project.vercel.app`.
+4. Add the one extra dependency this version needs, for reading `.docx`
+   files:
+   ```
+   npm install mammoth
+   ```
+   (PDFs don't need this — Gemini reads those natively, same as images.)
+5. Deploy. You'll get a URL like `https://your-project.vercel.app`.
 
 ## 2. Point Telegram at it (one-time, do this once after every deploy of a new URL)
 
@@ -59,6 +65,30 @@ analyze it (see below).
   just deprecated), so failures here return a plain error message rather
   than silently falling back to something less reliable. Text chat and
   image *generation* both still have their normal fallbacks.
+
+## Document reading
+
+- Send a PDF, `.docx`, or plain-text (`.txt`) file — with or without a
+  caption — and the bot reads it.
+- With a caption, the caption is used as your question ("what's the total
+  on page 2?", "translate this to English", etc). Without one, it defaults
+  to: answer any question/problem in the document if there is one,
+  otherwise summarize it.
+- **PDFs** go straight to Gemini the same way photos do (no extraction
+  step) — this also means it can handle scanned/image-only PDFs, since
+  Gemini is reading the actual pages, not parsed text.
+- **`.docx`** files have their text pulled out first with the `mammoth`
+  package (Gemini's document understanding doesn't accept `.docx` directly
+  the way it does PDFs and images), then sent as a normal text prompt.
+- **`.txt`** files are read directly as plain text.
+- Old-format `.doc`, `.pptx`, `.xlsx`, and other file types aren't wired up
+  yet — the bot will tell you it can't read them rather than failing
+  silently.
+- Telegram bots can only download files up to 20MB — anything bigger gets
+  a clear "too big" message instead of a failed/hanging request.
+- Uses `getAiReply` (Gemini → Groq fallback) for `.docx`/`.txt`, and the
+  vision path (Gemini only, no fallback — see above) for PDFs, since PDFs
+  go through the same multimodal call as images.
 
 ## Image generation
 
