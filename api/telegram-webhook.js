@@ -1,4 +1,4 @@
-// api/telegram-webhook.js
+/ api/telegram-webhook.js
 //
 // Telegram webhook handler — Gemini for text + vision (Groq fallback for
 // text only), Pollinations.ai for image generation. Stateless: Vercel spins
@@ -21,8 +21,18 @@
 //   send a photo     analyzes it — uses your caption as the question if you
 //                     add one, otherwise reads/answers anything written in
 //                     the image or describes it
+//   send a document  reads PDF, .docx, or plain-text files — uses your
+//                     caption as the question if you add one, otherwise
+//                     summarizes / answers whatever's in the file
 //   anything else    normal text chat (Gemini, falls back to Groq)
-
+//
+// Extra npm dependency for document reading:
+//   mammoth   pulls plain text out of .docx files (PDFs don't need this —
+//              Gemini reads those natively). Add it with:
+//                npm install mammoth
+ 
+import mammoth from "mammoth";
+ 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const AUTHORIZED_CHAT_IDS = (process.env.AUTHORIZED_CHAT_IDS || "")
   .split(",")
@@ -31,15 +41,15 @@ const AUTHORIZED_CHAT_IDS = (process.env.AUTHORIZED_CHAT_IDS || "")
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET;
-
+ 
 // Model IDs current as of Aug 2026 — swap if your account has different access.
 const GEMINI_MODEL = "gemini-3.6-flash";
 const GROQ_MODEL = "openai/gpt-oss-120b"; // Groq's current flagship open model (text only)
-
+ 
 const DEVELOPER_CREDIT = "Made by Nahom (NF).";
 const UNAUTHORIZED_NOTICE =
   "🤖 This bot was made by Nahom (NF). It's private, so I can't chat with you here — but thanks for stopping by!";
-
+ 
 // Free, no-cost way to noticeably improve answer quality without changing
 // models (the underlying model is already the strongest one available on
 // the free tier — see the README for why "more powerful" mostly means
@@ -50,7 +60,7 @@ const SYSTEM_PROMPT =
   "shorten a good answer just to be brief. Plain text only, no markdown headers " +
   "(Telegram doesn't render them well) — use line breaks and dashes for " +
   "structure instead.";
-
+ 
 async function askGemini(prompt) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
   const resp = await fetch(url, {
@@ -67,7 +77,7 @@ async function askGemini(prompt) {
   if (!text) throw new Error("Gemini returned no text");
   return text;
 }
-
+ 
 // Same Gemini endpoint, just with an extra inline_data part — Gemini
 // natively handles text+image together in one request, no separate
 // "vision model" needed.
@@ -94,7 +104,7 @@ async function askGeminiVision(prompt, base64Image, mimeType) {
   if (!text) throw new Error("Gemini vision returned no text");
   return text;
 }
-
+ 
 // Resolves a Telegram file_id to a downloadable URL — photos come in as
 // IDs, not URLs, so this is always the first step before fetching one.
 async function getTelegramFileUrl(fileId) {
@@ -105,7 +115,7 @@ async function getTelegramFileUrl(fileId) {
   if (!data.ok) throw new Error(`getFile failed: ${JSON.stringify(data)}`);
   return `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${data.result.file_path}`;
 }
-
+ 
 async function fetchAsBase64(url) {
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`Failed to download file: ${resp.status}`);
@@ -113,7 +123,7 @@ async function fetchAsBase64(url) {
   const arrayBuffer = await resp.arrayBuffer();
   return { base64: Buffer.from(arrayBuffer).toString("base64"), mimeType };
 }
-
+ 
 // Returns a Buffer of image bytes for /image generation. Uses
 // Pollinations.ai's older image.pollinations.ai endpoint, which — unlike
 // the newer gen.pollinations.ai unified API — still works without any API
@@ -127,7 +137,7 @@ async function askPollinationsImage(prompt) {
   const arrayBuffer = await resp.arrayBuffer();
   return { buffer: Buffer.from(arrayBuffer), mimeType };
 }
-
+ 
 async function askGroq(prompt) {
   const resp = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
@@ -149,7 +159,7 @@ async function askGroq(prompt) {
   if (!text) throw new Error("Groq returned no text");
   return text;
 }
-
+ 
 async function getAiReply(prompt) {
   try {
     return await askGemini(prompt);
@@ -163,20 +173,22 @@ async function getAiReply(prompt) {
     }
   }
 }
-
+ 
 // No Groq fallback for vision on purpose: Groq's only current vision model
 // (qwen/qwen3.6-27b) is explicitly a preview model in their own docs, and
 // their previous stable vision model (Llama 4 Scout) was just deprecated.
 // Better to fail clearly than silently hand you a less reliable answer.
+// Also used for PDFs sent as documents, since Gemini reads those through
+// the exact same inline_data + mimeType mechanism as images.
 async function getVisionReply(prompt, base64Image, mimeType) {
   try {
     return await askGeminiVision(prompt, base64Image, mimeType);
   } catch (err) {
-    console.error("Gemini vision failed:", err.message);
-    return `⚠️ Couldn't analyze that image right now: ${err.message}`;
+    console.error("Gemini vision/document failed:", err.message);
+    return `⚠️ Couldn't read that file right now: ${err.message}`;
   }
 }
-
+ 
 async function sendTypingAction(chatId) {
   try {
     await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendChatAction`, {
@@ -188,7 +200,7 @@ async function sendTypingAction(chatId) {
     // A missed typing indicator isn't worth failing the request over.
   }
 }
-
+ 
 async function sendTelegramMessage(chatId, text) {
   await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: "POST",
@@ -196,7 +208,7 @@ async function sendTelegramMessage(chatId, text) {
     body: JSON.stringify({ chat_id: chatId, text }),
   });
 }
-
+ 
 async function sendTelegramPhoto(chatId, imageBuffer, mimeType, caption) {
   const ext = mimeType.includes("png") ? "png" : "jpg";
   const form = new FormData();
@@ -208,7 +220,7 @@ async function sendTelegramPhoto(chatId, imageBuffer, mimeType, caption) {
     body: form,
   });
 }
-
+ 
 export default async function handler(req, res) {
   // Anything that isn't Telegram POSTing an update (e.g. you opening the
   // URL in a browser) just gets a plain 200 so it doesn't look broken.
@@ -216,23 +228,23 @@ export default async function handler(req, res) {
     res.status(200).send("Telegram AI bot webhook is up.");
     return;
   }
-
+ 
   // Confirms the request actually came from Telegram and not a stranger
   // who found this URL and started POSTing fake updates to it.
   if (WEBHOOK_SECRET && req.headers["x-telegram-bot-api-secret-token"] !== WEBHOOK_SECRET) {
     res.status(401).send("Unauthorized");
     return;
   }
-
+ 
   const update = req.body;
   const message = update?.message;
   const chatId = message?.chat?.id;
-
+ 
   if (!chatId) {
     res.status(200).send("OK");
     return;
   }
-
+ 
   // Strangers now get a short reply instead of silence — tells them who
   // made it and that it's private, then stops there (no AI call, so it
   // costs nothing even if someone messages repeatedly).
@@ -242,18 +254,18 @@ export default async function handler(req, res) {
     res.status(200).send("OK");
     return;
   }
-
+ 
   const text = message.text;
-
+ 
   if (text === "/start") {
     await sendTelegramMessage(
       chatId,
-      `I'm online — Gemini for chat (Groq backup), /image <description> for pictures, and send me a photo any time and I'll analyze it.\n\n${DEVELOPER_CREDIT}`
+      `I'm online — Gemini for chat (Groq backup), /image <description> for pictures, send me a photo any time and I'll analyze it, and send me a PDF, .docx, or text file and I'll read it too.\n\n${DEVELOPER_CREDIT}`
     );
     res.status(200).send("OK");
     return;
   }
-
+ 
   // Photo message (with or without a caption).
   if (message.photo && message.photo.length) {
     const largest = message.photo[message.photo.length - 1]; // last = highest res
@@ -262,7 +274,7 @@ export default async function handler(req, res) {
       "Look at this image. If it contains a question, problem, or text to solve " +
         "(like a screenshot of homework, a quiz, or a math problem), read it and " +
         "answer it directly. Otherwise, describe what's in the image.";
-
+ 
     try {
       await sendTypingAction(chatId);
       const fileUrl = await getTelegramFileUrl(largest.file_id);
@@ -282,13 +294,86 @@ export default async function handler(req, res) {
     res.status(200).send("OK");
     return;
   }
-
+ 
+  // Document message (PDF, .docx, or plain text — sent as a "file" rather
+  // than a "photo" on Telegram, so it arrives as message.document).
+  if (message.document) {
+    const doc = message.document;
+    const fileName = doc.file_name || "file";
+    const mimeType = doc.mime_type || "";
+    const lowerName = fileName.toLowerCase();
+    const question =
+      (message.caption || "").trim() ||
+      "Read this document. If it contains a question or something to solve, " +
+        "answer it directly. Otherwise, summarize what's in it.";
+ 
+    // Telegram bots can only download files up to 20MB regardless of chat type.
+    if (doc.file_size && doc.file_size > 20 * 1024 * 1024) {
+      await sendTelegramMessage(
+        chatId,
+        "⚠️ That file's too big for me to download — Telegram bots max out at 20MB."
+      );
+      res.status(200).send("OK");
+      return;
+    }
+ 
+    try {
+      await sendTypingAction(chatId);
+      const fileUrl = await getTelegramFileUrl(doc.file_id);
+ 
+      if (mimeType === "application/pdf" || lowerName.endsWith(".pdf")) {
+        // Gemini reads PDFs natively through the same inline_data mechanism
+        // used for images — no text extraction needed, and it handles
+        // scanned/image-only PDFs too since it's reading the actual pages.
+        const { base64 } = await fetchAsBase64(fileUrl);
+        const answer = await getVisionReply(question, base64, "application/pdf");
+        await sendTelegramMessage(chatId, answer);
+      } else if (
+        mimeType ===
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+        lowerName.endsWith(".docx")
+      ) {
+        // Gemini's inline_data doesn't accept .docx directly, so pull the
+        // text out first with mammoth and send it as a normal text prompt.
+        const resp = await fetch(fileUrl);
+        const arrayBuffer = await resp.arrayBuffer();
+        const { value: docText } = await mammoth.extractRawText({
+          buffer: Buffer.from(arrayBuffer),
+        });
+        if (!docText.trim()) {
+          await sendTelegramMessage(chatId, "⚠️ Couldn't find any text in that .docx file.");
+        } else {
+          const prompt = `${question}\n\n--- Document text ---\n${docText.slice(0, 30000)}`;
+          const answer = await getAiReply(prompt);
+          await sendTelegramMessage(chatId, answer);
+        }
+      } else if (mimeType.startsWith("text/") || lowerName.endsWith(".txt")) {
+        const resp = await fetch(fileUrl);
+        const docText = await resp.text();
+        const prompt = `${question}\n\n--- Document text ---\n${docText.slice(0, 30000)}`;
+        const answer = await getAiReply(prompt);
+        await sendTelegramMessage(chatId, answer);
+      } else {
+        // Old .doc, .pptx, .xlsx, etc. — not wired up yet.
+        await sendTelegramMessage(
+          chatId,
+          `⚠️ I can only read PDF, .docx, and plain text files right now — "${fileName}" isn't one of those.`
+        );
+      }
+    } catch (err) {
+      console.error("Document pipeline failed:", err.message);
+      await sendTelegramMessage(chatId, `⚠️ Couldn't process that file: ${err.message}`);
+    }
+    res.status(200).send("OK");
+    return;
+  }
+ 
   if (!text) {
     // Sticker, voice note, etc. — nothing to reply to.
     res.status(200).send("OK");
     return;
   }
-
+ 
   const imageMatch = text.match(/^\/(image|img)\s+([\s\S]+)/i);
   if (imageMatch) {
     const imagePrompt = imageMatch[2].trim();
@@ -302,15 +387,16 @@ export default async function handler(req, res) {
     res.status(200).send("OK");
     return;
   }
-
+ 
   if (/^\/(image|img)$/i.test(text)) {
     await sendTelegramMessage(chatId, "Send it like: /image a red fox in a snowy forest");
     res.status(200).send("OK");
     return;
   }
-
+ 
   await sendTypingAction(chatId);
   const reply = await getAiReply(text);
   await sendTelegramMessage(chatId, reply);
   res.status(200).send("OK");
 }
+ 
