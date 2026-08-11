@@ -1,4 +1,4 @@
-/ api/telegram-webhook.js
+// api/telegram-webhook.js
 //
 // Telegram webhook handler — Gemini for text + vision (Groq fallback for
 // text only), Pollinations.ai for image generation. Stateless: Vercel spins
