@@ -2,6 +2,12 @@
   "functions": {
     "api/telegram-webhook.js": {
       "maxDuration": 60
+    },
+    "api/miniapp/chats.js": {
+      "maxDuration": 30
+    },
+    "api/miniapp/messages.js": {
+      "maxDuration": 60
     }
   }
 }
