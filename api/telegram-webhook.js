@@ -32,6 +32,7 @@
 //                npm install mammoth
 
 import mammoth from "mammoth";
+import { fetchWithTimeout } from "../lib/fetchWithTimeout.js";
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const AUTHORIZED_CHAT_IDS = (process.env.AUTHORIZED_CHAT_IDS || "")
@@ -67,14 +68,14 @@ const SYSTEM_PROMPT =
 
 async function askGemini(prompt) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-  const resp = await fetch(url, {
+  const resp = await fetchWithTimeout(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
       contents: [{ parts: [{ text: prompt }] }],
     }),
-  });
+  }, 20000);
   if (!resp.ok) throw new Error(`Gemini error ${resp.status}: ${await resp.text()}`);
   const data = await resp.json();
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -87,7 +88,7 @@ async function askGemini(prompt) {
 // "vision model" needed.
 async function askGeminiVision(prompt, base64Image, mimeType) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-  const resp = await fetch(url, {
+  const resp = await fetchWithTimeout(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -101,7 +102,7 @@ async function askGeminiVision(prompt, base64Image, mimeType) {
         },
       ],
     }),
-  });
+  }, 30000); // images/PDFs legitimately take a bit longer than plain text
   if (!resp.ok) throw new Error(`Gemini vision error ${resp.status}: ${await resp.text()}`);
   const data = await resp.json();
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -112,8 +113,10 @@ async function askGeminiVision(prompt, base64Image, mimeType) {
 // Resolves a Telegram file_id to a downloadable URL — photos come in as
 // IDs, not URLs, so this is always the first step before fetching one.
 async function getTelegramFileUrl(fileId) {
-  const resp = await fetch(
-    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`
+  const resp = await fetchWithTimeout(
+    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`,
+    {},
+    10000
   );
   const data = await resp.json();
   if (!data.ok) throw new Error(`getFile failed: ${JSON.stringify(data)}`);
@@ -121,7 +124,7 @@ async function getTelegramFileUrl(fileId) {
 }
 
 async function fetchAsBase64(url) {
-  const resp = await fetch(url);
+  const resp = await fetchWithTimeout(url, {}, 20000);
   if (!resp.ok) throw new Error(`Failed to download file: ${resp.status}`);
   const mimeType = resp.headers.get("content-type") || "image/jpeg";
   const arrayBuffer = await resp.arrayBuffer();
@@ -135,7 +138,7 @@ async function fetchAsBase64(url) {
 // anonymous use, which is plenty for a single-person bot.
 async function askPollinationsImage(prompt) {
   const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}`;
-  const resp = await fetch(url);
+  const resp = await fetchWithTimeout(url, {}, 30000); // image generation takes longer than text
   if (!resp.ok) throw new Error(`Pollinations error ${resp.status}: ${await resp.text()}`);
   const mimeType = resp.headers.get("content-type") || "image/jpeg";
   const arrayBuffer = await resp.arrayBuffer();
@@ -143,7 +146,7 @@ async function askPollinationsImage(prompt) {
 }
 
 async function askGroq(prompt) {
-  const resp = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+  const resp = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -156,7 +159,7 @@ async function askGroq(prompt) {
         { role: "user", content: prompt },
       ],
     }),
-  });
+  }, 20000);
   if (!resp.ok) throw new Error(`Groq error ${resp.status}: ${await resp.text()}`);
   const data = await resp.json();
   const text = data?.choices?.[0]?.message?.content;
@@ -195,11 +198,11 @@ async function getVisionReply(prompt, base64Image, mimeType) {
 
 async function sendTypingAction(chatId) {
   try {
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendChatAction`, {
+    await fetchWithTimeout(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendChatAction`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, action: "typing" }),
-    });
+    }, 8000);
   } catch {
     // A missed typing indicator isn't worth failing the request over.
   }
@@ -230,11 +233,11 @@ function splitForTelegram(text, limit = TELEGRAM_MESSAGE_LIMIT) {
 
 async function sendTelegramMessage(chatId, text) {
   for (const chunk of splitForTelegram(text)) {
-    const resp = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    const resp = await fetchWithTimeout(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, text: chunk }),
-    });
+    }, 10000);
     if (!resp.ok) {
       console.error(`sendMessage failed (${resp.status}):`, await resp.text());
     }
@@ -258,11 +261,11 @@ async function sendStartMessage(chatId) {
       inline_keyboard: [[{ text: "💬 Open Chat App", web_app: { url: MINI_APP_URL } }]],
     };
   }
-  const resp = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+  const resp = await fetchWithTimeout(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  });
+  }, 10000);
   if (!resp.ok) {
     console.error(`sendStartMessage failed (${resp.status}):`, await resp.text());
   }
@@ -274,10 +277,10 @@ async function sendTelegramPhoto(chatId, imageBuffer, mimeType, caption) {
   form.append("chat_id", String(chatId));
   if (caption) form.append("caption", caption.slice(0, 1024));
   form.append("photo", new Blob([imageBuffer], { type: mimeType }), `image.${ext}`);
-  await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+  await fetchWithTimeout(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
     method: "POST",
     body: form,
-  });
+  }, 20000);
 }
 
 export default async function handler(req, res) {
@@ -391,7 +394,7 @@ export default async function handler(req, res) {
       ) {
         // Gemini's inline_data doesn't accept .docx directly, so pull the
         // text out first with mammoth and send it as a normal text prompt.
-        const resp = await fetch(fileUrl);
+        const resp = await fetchWithTimeout(fileUrl, {}, 20000);
         const arrayBuffer = await resp.arrayBuffer();
         const { value: docText } = await mammoth.extractRawText({
           buffer: Buffer.from(arrayBuffer),
@@ -404,7 +407,7 @@ export default async function handler(req, res) {
           await sendTelegramMessage(chatId, answer);
         }
       } else if (mimeType.startsWith("text/") || lowerName.endsWith(".txt")) {
-        const resp = await fetch(fileUrl);
+        const resp = await fetchWithTimeout(fileUrl, {}, 20000);
         const docText = await resp.text();
         const prompt = `${question}\n\n--- Document text ---\n${docText.slice(0, 30000)}`;
         const answer = await getAiReply(prompt);

@@ -80,14 +80,10 @@
     width: 88px;
     height: 88px;
     border-radius: 50%;
-    background: var(--button);
-    color: var(--button-text);
-    font-size: 36px;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    overflow: hidden;
+    flex-shrink: 0;
   }
+  .splash-logo img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .splash-name { font-size: 19px; font-weight: 600; }
   .splash-spacer { flex: 1; max-height: 80px; }
   .splash-credit {
@@ -111,14 +107,10 @@
     width: 30px;
     height: 30px;
     border-radius: 50%;
-    background: var(--button);
-    color: var(--button-text);
-    font-size: 14px;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    overflow: hidden;
+    flex-shrink: 0;
   }
+  .brand-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
   /* --- Menu drawer --- */
   .menu-overlay {
@@ -158,14 +150,10 @@
     width: 64px;
     height: 64px;
     border-radius: 50%;
-    background: var(--button);
-    color: var(--button-text);
-    font-size: 26px;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    overflow: hidden;
+    flex-shrink: 0;
   }
+  .menu-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .menu-bot-name { font-size: 16.5px; font-weight: 600; }
   .menu-designer { font-size: 12.5px; color: var(--hint); }
   .menu-list { padding: 10px 0; flex: 1; }
@@ -484,7 +472,7 @@
 </head>
 <body>
 <div id="splash">
-  <div class="splash-logo" id="splash-avatar"></div>
+  <div class="splash-logo"><img src="/logo.jpg" alt="" /></div>
   <div class="splash-name" id="splash-name"></div>
   <div class="splash-spacer"></div>
   <div class="splash-credit">Made by NF</div>
@@ -493,7 +481,7 @@
   <div id="view-list" class="view">
     <header class="topbar">
       <div class="brand" id="open-menu-brand">
-        <div class="brand-avatar" id="brand-avatar"></div>
+        <div class="brand-avatar"><img src="/logo.jpg" alt="" /></div>
       </div>
       <h1>Chats</h1>
       <button id="menu-btn" class="icon-btn" aria-label="Menu">☰</button>
@@ -560,7 +548,7 @@
 <div id="menu-overlay" class="menu-overlay" hidden></div>
 <aside id="menu-drawer" class="menu-drawer">
   <div class="menu-header">
-    <div class="menu-avatar" id="menu-avatar"></div>
+    <div class="menu-avatar"><img src="/logo.jpg" alt="" /></div>
     <div class="menu-bot-name" id="menu-bot-name"></div>
     <div class="menu-designer">Designed by Nahom (NF)</div>
   </div>
@@ -576,10 +564,8 @@
 
 <script>
   // Edit this to your bot's real display name — it drives the splash
-  // screen, the menu header, and the page title. Swap the .brand-avatar /
-  // .menu-avatar / .splash-logo divs for a real <img> once you have an
-  // actual logo file; for now they show the first letter as a placeholder,
-  // Telegram-contact-photo style.
+  // screen, the menu header, and the page title. The logo itself is
+  // public/logo.jpg, referenced directly in the HTML below.
   const BOT_NAME = "NF Assistant";
 
   const tg = window.Telegram?.WebApp;
@@ -612,10 +598,6 @@
   const addMemoryBtn = document.getElementById("add-memory-btn");
 
   document.title = BOT_NAME;
-  const initial = BOT_NAME.trim().charAt(0).toUpperCase() || "?";
-  for (const id of ["splash-avatar", "brand-avatar", "menu-avatar"]) {
-    document.getElementById(id).textContent = initial;
-  }
   document.getElementById("splash-name").textContent = BOT_NAME;
   document.getElementById("menu-bot-name").textContent = BOT_NAME;
 
