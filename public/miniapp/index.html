@@ -21,6 +21,30 @@
     --section-separator: rgba(127, 127, 127, 0.2);
   }
 
+  /* Manual overrides for the Settings theme toggle — "System" (default)
+     leaves the variables above alone, so it keeps following Telegram's
+     live theme. Picking Light/Dark applies one of these instead. */
+  html.theme-light {
+    --bg: #ffffff;
+    --secondary-bg: #f0f0f0;
+    --text: #111111;
+    --hint: #707579;
+    --link: #2481cc;
+    --button: #2481cc;
+    --button-text: #ffffff;
+    --header-bg: #f7f7f7;
+  }
+  html.theme-dark {
+    --bg: #17212b;
+    --secondary-bg: #232e3c;
+    --text: #ffffff;
+    --hint: #7d8b99;
+    --link: #6ab3f3;
+    --button: #5288c1;
+    --button-text: #ffffff;
+    --header-bg: #17212b;
+  }
+
   * { box-sizing: border-box; }
 
   html, body {
@@ -38,6 +62,139 @@
     overflow: hidden;
   }
 
+  /* --- Splash screen --- */
+  #splash {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    background: var(--bg);
+    transition: opacity 0.35s ease;
+  }
+  #splash.splash-hidden { opacity: 0; pointer-events: none; }
+  .splash-logo {
+    width: 88px;
+    height: 88px;
+    border-radius: 50%;
+    background: var(--button);
+    color: var(--button-text);
+    font-size: 36px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .splash-name { font-size: 19px; font-weight: 600; }
+  .splash-spacer { flex: 1; max-height: 80px; }
+  .splash-credit {
+    position: fixed;
+    bottom: max(24px, env(safe-area-inset-bottom));
+    padding: 8px 16px;
+    border-radius: 20px;
+    background: var(--secondary-bg);
+    color: var(--hint);
+    font-size: 12.5px;
+    font-weight: 500;
+  }
+
+  /* --- Brand / hamburger header --- */
+  .brand {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+  }
+  .brand-avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: var(--button);
+    color: var(--button-text);
+    font-size: 14px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* --- Menu drawer --- */
+  .menu-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: rgba(0, 0, 0, 0);
+    transition: background 0.25s ease;
+  }
+  .menu-overlay.visible { background: rgba(0, 0, 0, 0.4); }
+  .menu-drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 78%;
+    max-width: 300px;
+    z-index: 41;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    transform: translateX(100%);
+    transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.15);
+  }
+  .menu-drawer.open { transform: translateX(0); }
+  .menu-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 8px;
+    padding: 32px 20px 20px;
+    border-bottom: 1px solid var(--section-separator);
+  }
+  .menu-avatar {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: var(--button);
+    color: var(--button-text);
+    font-size: 26px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .menu-bot-name { font-size: 16.5px; font-weight: 600; }
+  .menu-designer { font-size: 12.5px; color: var(--hint); }
+  .menu-list { padding: 10px 0; flex: 1; }
+  .menu-item {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    background: none;
+    border: none;
+    color: var(--text);
+    font-size: 15px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .menu-item:active { background: var(--secondary-bg); }
+  .menu-item-icon { font-size: 18px; width: 20px; text-align: center; }
+  .menu-footer { padding: 16px 20px; display: flex; justify-content: center; }
+  .credit-box {
+    padding: 8px 14px;
+    border-radius: 20px;
+    background: var(--secondary-bg);
+    color: var(--hint);
+    font-size: 12px;
+    font-weight: 500;
+    text-align: center;
+  }
+
   .view {
     position: absolute;
     inset: 0;
@@ -49,9 +206,11 @@
   @media (prefers-reduced-motion: reduce) {
     .view { transition: none; }
   }
-  #view-chat { transform: translateX(100%); }
+  #view-chat, #view-settings { transform: translateX(100%); }
   #app.chat-active #view-list { transform: translateX(-30%); }
   #app.chat-active #view-chat { transform: translateX(0); }
+  #app.settings-active #view-list { transform: translateX(-30%); }
+  #app.settings-active #view-settings { transform: translateX(0); }
 
   .topbar {
     display: flex;
@@ -210,20 +369,86 @@
     color: var(--hint);
     font-size: 14px;
   }
+
+  /* --- Settings view --- */
+  .settings-body { flex: 1; overflow-y: auto; padding: 16px; }
+  .settings-section {
+    background: var(--secondary-bg);
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 16px;
+  }
+  .settings-label { font-size: 15px; font-weight: 500; }
+  .settings-hint { font-size: 12.5px; color: var(--hint); margin-top: 3px; line-height: 1.4; }
+  .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+  .segmented {
+    display: flex;
+    background: var(--bg);
+    border-radius: 8px;
+    padding: 3px;
+    margin-top: 10px;
+  }
+  .segmented-btn {
+    flex: 1;
+    border: none;
+    background: none;
+    padding: 7px 0;
+    font-size: 13.5px;
+    color: var(--text);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .segmented-btn.active { background: var(--button); color: var(--button-text); }
+
+  .switch { position: relative; display: inline-block; width: 44px; height: 26px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch-slider {
+    position: absolute;
+    inset: 0;
+    background: var(--section-separator);
+    border-radius: 26px;
+    cursor: pointer;
+    transition: background 0.2s ease;
+  }
+  .switch-slider::before {
+    content: "";
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    left: 3px;
+    top: 3px;
+    background: #ffffff;
+    border-radius: 50%;
+    transition: transform 0.2s ease;
+  }
+  .switch input:checked + .switch-slider { background: var(--button); }
+  .switch input:checked + .switch-slider::before { transform: translateX(18px); }
 </style>
 </head>
 <body>
+<div id="splash">
+  <div class="splash-logo" id="splash-avatar"></div>
+  <div class="splash-name" id="splash-name"></div>
+  <div class="splash-spacer"></div>
+  <div class="splash-credit">Made by NF</div>
+</div>
 <div id="app">
   <div id="view-list" class="view">
     <header class="topbar">
+      <div class="brand" id="open-menu-brand">
+        <div class="brand-avatar" id="brand-avatar"></div>
+      </div>
       <h1>Chats</h1>
-      <button id="new-chat-btn" class="icon-btn" aria-label="New chat">+</button>
+      <button id="menu-btn" class="icon-btn" aria-label="Menu">☰</button>
     </header>
     <div id="chat-list" class="chat-list"></div>
     <div id="empty-state" class="empty-state" hidden>
       <p class="headline">No chats yet</p>
       <p>Tap + to start one.</p>
     </div>
+    <!-- kept in the list view so it's easy to find; could move to a footer bar later -->
+    <button id="new-chat-fab" class="icon-btn" style="position:absolute; right:16px; bottom:20px; background:var(--button); color:var(--button-text); width:48px; height:48px; border-radius:50%; font-size:24px;" aria-label="New chat">+</button>
   </div>
 
   <div id="view-chat" class="view">
@@ -237,9 +462,62 @@
       <button id="send-btn" class="send-btn" type="submit" aria-label="Send">➤</button>
     </form>
   </div>
+
+  <div id="view-settings" class="view">
+    <header class="topbar">
+      <button id="settings-back-btn" class="icon-btn" aria-label="Back">‹</button>
+      <h1>Settings</h1>
+    </header>
+    <div class="settings-body">
+      <div class="settings-section">
+        <div class="settings-label">Theme</div>
+        <div class="segmented" id="theme-segmented">
+          <button type="button" class="segmented-btn" data-theme="system">System</button>
+          <button type="button" class="segmented-btn" data-theme="light">Light</button>
+          <button type="button" class="segmented-btn" data-theme="dark">Dark</button>
+        </div>
+      </div>
+      <div class="settings-section">
+        <div class="settings-row">
+          <div>
+            <div class="settings-label">Remember across chats</div>
+            <div class="settings-hint">New chats get a short summary of your last chat as background context — not the full history, and not merged together.</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="memory-toggle" />
+            <span class="switch-slider"></span>
+          </label>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
+<div id="menu-overlay" class="menu-overlay" hidden></div>
+<aside id="menu-drawer" class="menu-drawer">
+  <div class="menu-header">
+    <div class="menu-avatar" id="menu-avatar"></div>
+    <div class="menu-bot-name" id="menu-bot-name"></div>
+    <div class="menu-designer">Designed by Nahom (NF)</div>
+  </div>
+  <nav class="menu-list">
+    <button class="menu-item" id="open-settings-btn">
+      <span class="menu-item-icon">⚙️</span> Settings
+    </button>
+  </nav>
+  <div class="menu-footer">
+    <div class="credit-box">Created by NF · © 2026</div>
+  </div>
+</aside>
+
 <script>
+  // Edit this to your bot's real display name — it drives the splash
+  // screen, the menu header, and the page title. Swap the .brand-avatar /
+  // .menu-avatar / .splash-logo divs for a real <img> once you have an
+  // actual logo file; for now they show the first letter as a placeholder,
+  // Telegram-contact-photo style.
+  const BOT_NAME = "NF Assistant";
+
   const tg = window.Telegram?.WebApp;
   tg?.ready();
   tg?.expand();
@@ -255,8 +533,24 @@
   const composerEl = document.getElementById("composer");
   const inputEl = document.getElementById("input");
   const sendBtn = document.getElementById("send-btn");
-  const newChatBtn = document.getElementById("new-chat-btn");
+  const newChatBtn = document.getElementById("new-chat-fab");
   const backBtn = document.getElementById("back-btn");
+  const menuBtn = document.getElementById("menu-btn");
+  const brandBtn = document.getElementById("open-menu-brand");
+  const menuOverlay = document.getElementById("menu-overlay");
+  const menuDrawer = document.getElementById("menu-drawer");
+  const settingsBackBtn = document.getElementById("settings-back-btn");
+  const openSettingsBtn = document.getElementById("open-settings-btn");
+  const themeSegmented = document.getElementById("theme-segmented");
+  const memoryToggle = document.getElementById("memory-toggle");
+
+  document.title = BOT_NAME;
+  const initial = BOT_NAME.trim().charAt(0).toUpperCase() || "?";
+  for (const id of ["splash-avatar", "brand-avatar", "menu-avatar"]) {
+    document.getElementById(id).textContent = initial;
+  }
+  document.getElementById("splash-name").textContent = BOT_NAME;
+  document.getElementById("menu-bot-name").textContent = BOT_NAME;
 
   let activeChatId = null;
 
@@ -289,7 +583,7 @@
   }
 
   function showListView() {
-    appEl.classList.remove("chat-active");
+    appEl.classList.remove("chat-active", "settings-active");
     activeChatId = null;
     tg?.BackButton?.hide();
   }
@@ -299,7 +593,84 @@
     tg?.BackButton?.show();
   }
 
+  function showSettingsView() {
+    appEl.classList.add("settings-active");
+    tg?.BackButton?.show();
+  }
+
   tg?.BackButton?.onClick(() => showListView());
+
+  // --- Theme (System / Light / Dark) ---
+  const THEME_KEY = "miniapp-theme";
+
+  function applyTheme(theme) {
+    document.documentElement.classList.remove("theme-light", "theme-dark");
+    if (theme === "light") document.documentElement.classList.add("theme-light");
+    if (theme === "dark") document.documentElement.classList.add("theme-dark");
+    for (const btn of themeSegmented.querySelectorAll(".segmented-btn")) {
+      btn.classList.toggle("active", btn.dataset.theme === theme);
+    }
+  }
+
+  const savedTheme = localStorage.getItem(THEME_KEY) || "system";
+  applyTheme(savedTheme);
+
+  themeSegmented.addEventListener("click", (e) => {
+    const btn = e.target.closest(".segmented-btn");
+    if (!btn) return;
+    localStorage.setItem(THEME_KEY, btn.dataset.theme);
+    applyTheme(btn.dataset.theme);
+  });
+
+  // --- Menu drawer ---
+  function openMenu() {
+    menuOverlay.hidden = false;
+    requestAnimationFrame(() => {
+      menuOverlay.classList.add("visible");
+      menuDrawer.classList.add("open");
+    });
+  }
+  function closeMenu() {
+    menuOverlay.classList.remove("visible");
+    menuDrawer.classList.remove("open");
+    setTimeout(() => { menuOverlay.hidden = true; }, 250);
+  }
+  menuBtn.addEventListener("click", openMenu);
+  brandBtn.addEventListener("click", openMenu);
+  menuOverlay.addEventListener("click", closeMenu);
+
+  openSettingsBtn.addEventListener("click", () => {
+    closeMenu();
+    showSettingsView();
+    loadSettings();
+  });
+  settingsBackBtn.addEventListener("click", showListView);
+
+  // --- Memory toggle (server-side — it affects how new chats are
+  // answered, so it has to live on the backend, not just this device) ---
+  async function loadSettings() {
+    try {
+      const settings = await apiFetch("/api/miniapp/settings");
+      memoryToggle.checked = !!settings.memoryEnabled;
+    } catch {
+      // Leave it as-is rather than blocking the settings screen over this.
+    }
+  }
+
+  memoryToggle.addEventListener("change", async () => {
+    const desired = memoryToggle.checked;
+    memoryToggle.disabled = true;
+    try {
+      await apiFetch("/api/miniapp/settings", {
+        method: "POST",
+        body: JSON.stringify({ memoryEnabled: desired }),
+      });
+    } catch {
+      memoryToggle.checked = !desired; // revert on failure
+    } finally {
+      memoryToggle.disabled = false;
+    }
+  });
 
   function renderChatList(chats) {
     chatListEl.innerHTML = "";
@@ -428,11 +799,26 @@
     }
   });
 
+  const MIN_SPLASH_MS = 700;
+  const MAX_SPLASH_MS = 3000;
+
+  function hideSplash() {
+    const el = document.getElementById("splash");
+    el.classList.add("splash-hidden");
+    setTimeout(() => el.remove(), 400);
+  }
+
   if (!initData) {
     showAuthError("no Telegram session found");
+    setTimeout(hideSplash, MIN_SPLASH_MS);
   } else {
-    loadChats();
+    const started = Date.now();
+    Promise.race([loadChats(), new Promise((r) => setTimeout(r, MAX_SPLASH_MS))]).finally(() => {
+      const elapsed = Date.now() - started;
+      setTimeout(hideSplash, Math.max(0, MIN_SPLASH_MS - elapsed));
+    });
   }
+
 </script>
 </body>
 </html>

@@ -4,7 +4,7 @@
 // switch between in the mini app; a "message" belongs to exactly one chat
 // and holds either the user's turn or the assistant's reply, in order.
 
-import { pgTable, serial, integer, bigint, text, timestamp, index } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, bigint, text, timestamp, boolean, index } from "drizzle-orm/pg-core";
 
 export const chats = pgTable(
   "chats",
@@ -13,6 +13,10 @@ export const chats = pgTable(
     // Telegram user IDs are up to 64-bit — bigint avoids overflow.
     telegramUserId: bigint("telegram_user_id", { mode: "number" }).notNull(),
     title: text("title").notNull().default("New chat"),
+    // Short AI-generated summary of this chat, generated lazily the first
+    // time another chat needs it for the "remember across chats" bridge —
+    // not populated eagerly, so it stays null until it's actually used.
+    summary: text("summary"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
@@ -20,6 +24,16 @@ export const chats = pgTable(
     userIdx: index("chats_telegram_user_id_idx").on(table.telegramUserId),
   })
 );
+
+// One row per Telegram user, holding preferences that affect server-side
+// behavior (unlike theme, which is purely cosmetic and stays client-side
+// in localStorage).
+export const userSettings = pgTable("user_settings", {
+  telegramUserId: bigint("telegram_user_id", { mode: "number" }).primaryKey(),
+  memoryEnabled: boolean("memory_enabled").notNull().default(false),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
 
 export const messages = pgTable(
   "messages",

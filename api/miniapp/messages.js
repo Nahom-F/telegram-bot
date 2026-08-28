@@ -14,6 +14,7 @@ import { db } from "../../db/client.js";
 import { chats, messages } from "../../db/schema.js";
 import { requireTelegramUser } from "../../lib/telegramAuth.js";
 import { getConversationReply } from "../../lib/ai.js";
+import { isMemoryEnabled, getMemoryContext } from "../../lib/memory.js";
 
 async function loadOwnedChat(chatId, telegramUserId) {
   const [chat] = await db
@@ -59,6 +60,14 @@ export default async function handler(req, res) {
       return;
     }
 
+    // Checked before inserting, so this reliably tells us whether the
+    // message we're about to add is the very first one in this chat —
+    // that's the only moment the memory bridge should kick in.
+    const priorCount = (
+      await db.select().from(messages).where(eq(messages.chatId, chat.id))
+    ).length;
+    const isFirstMessage = priorCount === 0;
+
     await db.insert(messages).values({ chatId: chat.id, role: "user", content: content.trim() });
 
     const history = await db
@@ -67,8 +76,14 @@ export default async function handler(req, res) {
       .where(eq(messages.chatId, chat.id))
       .orderBy(asc(messages.createdAt));
 
+    let memoryContext;
+    if (isFirstMessage && (await isMemoryEnabled(user.id))) {
+      memoryContext = await getMemoryContext(user.id, chat.id);
+    }
+
     const reply = await getConversationReply(
-      history.map((m) => ({ role: m.role, content: m.content }))
+      history.map((m) => ({ role: m.role, content: m.content })),
+      memoryContext
     );
 
     const [assistantMessage] = await db
