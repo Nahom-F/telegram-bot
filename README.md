@@ -90,6 +90,45 @@ analyze it (see below).
   vision path (Gemini only, no fallback — see above) for PDFs, since PDFs
   go through the same multimodal call as images.
 
+## Mini app (chat with saved history)
+
+A second way to use the bot: a proper chat interface, opened inside
+Telegram itself, where you can create multiple chats and switch between
+them — unlike the DM commands above, which don't remember anything between
+messages.
+
+**How it's built:** the frontend is one static file
+(`public/miniapp/index.html`) served by Vercel automatically — no separate
+hosting needed. It talks to two new API routes:
+
+- `api/miniapp/chats.js` — list / create your chats
+- `api/miniapp/messages.js` — load a chat's messages, send a new one and
+  get the AI's reply (using the whole thread as context, unlike the DM
+  chat)
+
+Everything is stored in Neon Postgres (see `db/schema.js`), and every
+request is checked against `initData` — the signed proof-of-identity
+Telegram gives the page — via `lib/telegramAuth.js`, so no chat is ever
+reachable by anyone but the Telegram user who made it.
+
+### One-time setup
+
+1. **Set `DATABASE_URL`.** Create a Neon Postgres database through Vercel's
+   Storage tab (search "Neon" in the marketplace) — this sets the env var
+   for you automatically. Then run `db/setup.sql` once in Neon's SQL
+   editor to create the tables.
+2. **Set `MINI_APP_URL`** to your deployed URL, e.g.
+   `https://your-project.vercel.app/miniapp/index.html`.
+3. **Register it with @BotFather:**
+   - Message `@BotFather` → `/mybots` → select your bot → **Bot Settings**
+     → **Menu Button** → **Configure Menu Button**.
+   - Send your `MINI_APP_URL` when asked for the URL, then send a short
+     label (e.g. "Chat") when asked for the button text.
+   - This adds a persistent button next to the message box in your chat
+     with the bot that opens the mini app directly.
+4. Redeploy. The bot's `/start` message will now also include an "Open
+   Chat App" inline button (it only appears once `MINI_APP_URL` is set).
+
 ## Image generation
 
 - Uses Pollinations.ai's `image.pollinations.ai` endpoint — genuinely free,

@@ -41,6 +41,10 @@ const AUTHORIZED_CHAT_IDS = (process.env.AUTHORIZED_CHAT_IDS || "")
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET;
+// e.g. https://your-project.vercel.app/miniapp/index.html — set after the
+// mini app is deployed. /start includes an "Open Chat App" button only
+// when this is set, so the bot still works fine without it.
+const MINI_APP_URL = process.env.MINI_APP_URL;
 
 // Model IDs current as of Aug 2026 — swap if your account has different access.
 const GEMINI_MODEL = "gemini-3.6-flash";
@@ -237,6 +241,33 @@ async function sendTelegramMessage(chatId, text) {
   }
 }
 
+// Separate from sendTelegramMessage because this one needs a reply_markup
+// (the inline button) — not something the normal chat replies ever use.
+async function sendStartMessage(chatId) {
+  const body = {
+    chat_id: chatId,
+    text:
+      "I'm online — Gemini for chat (Groq backup), /image <description> for pictures, " +
+      "send me a photo any time and I'll analyze it, and send me a PDF, .docx, or text " +
+      "file and I'll read it too." +
+      (MINI_APP_URL ? " There's also a proper chat app now, with saved history." : "") +
+      `\n\n${DEVELOPER_CREDIT}`,
+  };
+  if (MINI_APP_URL) {
+    body.reply_markup = {
+      inline_keyboard: [[{ text: "💬 Open Chat App", web_app: { url: MINI_APP_URL } }]],
+    };
+  }
+  const resp = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    console.error(`sendStartMessage failed (${resp.status}):`, await resp.text());
+  }
+}
+
 async function sendTelegramPhoto(chatId, imageBuffer, mimeType, caption) {
   const ext = mimeType.includes("png") ? "png" : "jpg";
   const form = new FormData();
@@ -286,10 +317,7 @@ export default async function handler(req, res) {
   const text = message.text;
 
   if (text === "/start") {
-    await sendTelegramMessage(
-      chatId,
-      `I'm online — Gemini for chat (Groq backup), /image <description> for pictures, send me a photo any time and I'll analyze it, and send me a PDF, .docx, or text file and I'll read it too.\n\n${DEVELOPER_CREDIT}`
-    );
+    await sendStartMessage(chatId);
     res.status(200).send("OK");
     return;
   }
