@@ -35,3 +35,13 @@ CREATE TABLE IF NOT EXISTS memories (
   updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS memories_telegram_user_id_idx ON memories(telegram_user_id);
+
+CREATE TABLE IF NOT EXISTS access_requests (
+  telegram_user_id BIGINT PRIMARY KEY,
+  status TEXT NOT NULL,
+  display_name TEXT,
+  reason TEXT,
+  requested_at TIMESTAMP NOT NULL DEFAULT now(),
+  decided_at TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT now()
+);

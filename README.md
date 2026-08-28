@@ -16,7 +16,7 @@ restart, and no PC or laptop needs to be on.
    | Key | Value |
    |---|---|
    | `TELEGRAM_BOT_TOKEN` | your bot token from BotFather |
-   | `AUTHORIZED_CHAT_IDS` | your numeric chat ID (comma-separate more if needed) |
+   | `OWNER_CHAT_ID` | your own numeric chat ID — see "Access control" below |
    | `GEMINI_API_KEY` | your Gemini key |
    | `GROQ_API_KEY` | your Groq key from console.groq.com (free, no card) |
    | `TELEGRAM_WEBHOOK_SECRET` | any random string you make up yourself |
@@ -158,15 +158,32 @@ invocations. A free external store like Upstash Redis, or your existing
 EcoFurnish database if you ever merge this bot into that project, would
 both work.
 
+## Access control
+
+Access is request-based, not a fixed list you have to redeploy to change:
+
+- **You (`OWNER_CHAT_ID`)** always have full access, and are the only one
+  who can approve, deny, or later remove anyone else.
+- **Anyone else** who messages the bot for the first time gets a "Request
+  Access" button. Tapping it asks them for a short reason; once they reply,
+  you get a DM with their name, chat ID, and reason, plus **Approve** /
+  **Deny** buttons.
+- **Approved** users can use the DM chat and the mini app — the mini app
+  checks the same access list, so approval on one covers both.
+- **Denied** users get a "Request Again" button rather than a dead end.
+- **`/users`** (you only) lists everyone currently approved, each with a
+  one-tap **Remove** button — this revokes access; they'd need to request
+  again to come back.
+
+All of this lives in `access_requests` in Neon (see `db/schema.js` and
+`lib/access.js`) — shared between the DM bot and the mini app, so there's
+one access list, not two that could drift out of sync.
+
 ## Notes
 
-- **Only you can use it.** The `AUTHORIZED_CHAT_IDS` check in the code
-  replies to anyone else with a short "made by Nahom (NF), this bot is
-  private" message and stops there — no AI call, so it costs nothing even
-  if a stranger messages repeatedly.
-- **Developer credit.** Shows in the `/start` reply, and in the notice
-  unauthorized users get — so anyone who finds and starts the bot sees who
-  made it either way.
+- **Developer credit.** Shows in the `/start` reply and in the access
+  request message, so anyone who finds and starts the bot sees who made it
+  either way.
 - **Model IDs** (`gemini-3.6-flash`, `openai/gpt-oss-120b`) are current as of Aug 2026.
   If either provider retires a model later, just change the constant near
   the top of `api/telegram-webhook.js`.

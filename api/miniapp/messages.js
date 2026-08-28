@@ -25,7 +25,7 @@ async function loadOwnedChat(chatId, telegramUserId) {
 }
 
 export default async function handler(req, res) {
-  const user = requireTelegramUser(req, res);
+  const user = await requireTelegramUser(req, res);
   if (!user) return;
 
   if (req.method === "GET") {

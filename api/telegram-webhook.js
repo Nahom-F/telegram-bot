@@ -8,8 +8,16 @@
 // Required environment variables (set in Vercel → Project Settings →
 // Environment Variables):
 //   TELEGRAM_BOT_TOKEN       your bot token from BotFather
-//   AUTHORIZED_CHAT_IDS      comma-separated chat IDs allowed to use the bot
-//                             (e.g. "123456789" or "123456789,987654321")
+//   OWNER_CHAT_ID            your own numeric chat id — the sole admin who
+//                             approves/denies access requests and can
+//                             remove people later. Replaces the old
+//                             AUTHORIZED_CHAT_IDS static allowlist —
+//                             everyone else's access is DB-backed now
+//                             (see lib/access.js), reachable through a
+//                             request -> approve/deny flow instead of a
+//                             fixed list you had to redeploy to change.
+//   DATABASE_URL              Neon Postgres — the access list lives here now,
+//                             shared with the mini app (see db/schema.js)
 //   GEMINI_API_KEY
 //   GROQ_API_KEY             from console.groq.com (free API tier, no card)
 //   TELEGRAM_WEBHOOK_SECRET  any random string you make up — verifies
@@ -18,27 +26,36 @@
 // Commands:
 //   /start           intro message
 //   /image <prompt>  generates an image via Pollinations.ai (also /img)
+//   /users           (owner only) lists approved users with a Remove button
 //   send a photo     analyzes it — uses your caption as the question if you
 //                     add one, otherwise reads/answers anything written in
 //                     the image or describes it
 //   send a document  reads PDF, .docx, or plain-text files — uses your
 //                     caption as the question if you add one, otherwise
 //                     summarizes / answers whatever's in the file
-//   anything else    normal text chat (Gemini, falls back to Groq)
+//   anything else    normal text chat (Groq primary for speed, Gemini
+//                     fallback) — unless you're not yet approved, in which
+//                     case the access-request flow handles it instead
 //
-// Extra npm dependency for document reading:
-//   mammoth   pulls plain text out of .docx files (PDFs don't need this —
-//              Gemini reads those natively). Add it with:
-//                npm install mammoth
+// Extra npm dependencies:
+//   mammoth               pulls text out of .docx files
+//   drizzle-orm           query builder for the shared Postgres access list
+//   @neondatabase/serverless   Neon's HTTP driver
 
 import mammoth from "mammoth";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout.js";
+import {
+  isOwner,
+  getOwnerChatId,
+  getAccessStatus,
+  startAccessRequest,
+  submitAccessReason,
+  decideAccessRequest,
+  removeUser,
+  listApprovedUsers,
+} from "../lib/access.js";
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const AUTHORIZED_CHAT_IDS = (process.env.AUTHORIZED_CHAT_IDS || "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET;
@@ -52,8 +69,6 @@ const GEMINI_MODEL = "gemini-3.6-flash";
 const GROQ_MODEL = "openai/gpt-oss-120b"; // Groq's current flagship open model (text only)
 
 const DEVELOPER_CREDIT = "Made by Nahom (NF).";
-const UNAUTHORIZED_NOTICE =
-  "🤖 This bot was made by Nahom (NF). It's private, so I can't chat with you here — but thanks for stopping by!";
 
 // Free, no-cost way to noticeably improve answer quality without changing
 // models (the underlying model is already the strongest one available on
@@ -278,6 +293,108 @@ async function sendStartMessage(chatId) {
   }
 }
 
+// Like sendTelegramMessage, but with an inline keyboard — used for the
+// access-request flow and /users. Not chunked through splitForTelegram
+// since every message that uses this is short and written by us.
+async function sendTelegramMessageWithKeyboard(chatId, text, inlineKeyboard) {
+  const resp = await fetchWithTimeout(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, text, reply_markup: { inline_keyboard: inlineKeyboard } }),
+  }, 10000);
+  if (!resp.ok) {
+    console.error(`sendMessage(keyboard) failed (${resp.status}):`, await resp.text());
+  }
+}
+
+// Telegram requires every callback_query to be acknowledged, or the
+// button shows a loading spinner on the tapper's end indefinitely.
+async function answerCallbackQuery(callbackQueryId, text) {
+  const body = { callback_query_id: callbackQueryId };
+  if (text) body.text = text;
+  const resp = await fetchWithTimeout(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }, 8000);
+  if (!resp.ok) {
+    console.error(`answerCallbackQuery failed (${resp.status}):`, await resp.text());
+  }
+}
+
+// Replaces a message's text (and drops its buttons) — used to turn the
+// owner's Approve/Deny prompt into a plain confirmation once they've
+// tapped one, so it can't be tapped twice.
+async function editMessageText(chatId, messageId, text) {
+  const resp = await fetchWithTimeout(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/editMessageText`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, message_id: messageId, text }),
+  }, 10000);
+  if (!resp.ok) {
+    console.error(`editMessageText failed (${resp.status}):`, await resp.text());
+  }
+}
+
+function formatDisplayName(from) {
+  if (!from) return "Unknown";
+  const name = [from.first_name, from.last_name].filter(Boolean).join(" ");
+  return from.username ? `${name} (@${from.username})` : name || `User ${from.id}`;
+}
+
+// Handles every inline button tap — a completely different update shape
+// from a normal message, so it's routed here before any message-handling
+// code even runs.
+async function handleCallbackQuery(cq) {
+  const chatId = cq.message?.chat?.id;
+  const fromId = cq.from?.id;
+  const data = cq.data || "";
+
+  if (data === "request_access") {
+    await startAccessRequest(fromId, formatDisplayName(cq.from));
+    await answerCallbackQuery(cq.id);
+    await sendTelegramMessage(chatId, "What's the reason you'd like access? Reply with a short message.");
+    return;
+  }
+
+  if (data.startsWith("approve:") || data.startsWith("deny:")) {
+    if (!isOwner(fromId)) {
+      await answerCallbackQuery(cq.id, "Only the bot owner can do that.");
+      return;
+    }
+    const [action, idStr] = data.split(":");
+    const targetId = Number(idStr);
+    const approved = action === "approve";
+    await decideAccessRequest(targetId, approved);
+    await answerCallbackQuery(cq.id, approved ? "Approved" : "Denied");
+    if (cq.message?.message_id) {
+      await editMessageText(chatId, cq.message.message_id, approved ? "✅ Approved" : "❌ Denied");
+    }
+    await sendTelegramMessage(
+      targetId,
+      approved ? "🎉 You've been approved! Send /start to begin." : "Your access request was declined."
+    );
+    return;
+  }
+
+  if (data.startsWith("remove:")) {
+    if (!isOwner(fromId)) {
+      await answerCallbackQuery(cq.id, "Only the bot owner can do that.");
+      return;
+    }
+    const targetId = Number(data.split(":")[1]);
+    await removeUser(targetId);
+    await answerCallbackQuery(cq.id, "Removed");
+    if (cq.message?.message_id) {
+      await editMessageText(chatId, cq.message.message_id, "🗑️ Removed");
+    }
+    return;
+  }
+
+  // Unknown callback_data — still must be acknowledged.
+  await answerCallbackQuery(cq.id);
+}
+
 async function sendTelegramPhoto(chatId, imageBuffer, mimeType, caption) {
   const ext = mimeType.includes("png") ? "png" : "jpg";
   const form = new FormData();
@@ -306,6 +423,16 @@ export default async function handler(req, res) {
   }
 
   const update = req.body;
+
+  // Inline button taps arrive as a completely different update shape from
+  // a message (no update.message at all) — handled entirely separately,
+  // before any of the message-shaped logic below even looks at the body.
+  if (update?.callback_query) {
+    await handleCallbackQuery(update.callback_query);
+    res.status(200).send("OK");
+    return;
+  }
+
   const message = update?.message;
   const chatId = message?.chat?.id;
 
@@ -314,20 +441,79 @@ export default async function handler(req, res) {
     return;
   }
 
-  // Strangers now get a short reply instead of silence — tells them who
-  // made it and that it's private, then stops there (no AI call, so it
-  // costs nothing even if someone messages repeatedly).
-  if (!AUTHORIZED_CHAT_IDS.includes(String(chatId))) {
-    console.log(`Unauthorized chat_id=${chatId} — sent developer notice only`);
-    await sendTelegramMessage(chatId, UNAUTHORIZED_NOTICE);
+  const text = message.text;
+
+  // --- Access gate ---
+  // Owner and approved users fall straight through to normal handling
+  // below. Everyone else is routed through the request/approve/deny flow
+  // instead of a flat "no" — see lib/access.js for the status lifecycle.
+  const accessStatus = isOwner(chatId) ? "owner" : await getAccessStatus(chatId);
+
+  if (accessStatus !== "owner" && accessStatus !== "approved") {
+    if (accessStatus === "awaiting_reason") {
+      if (!text || text.startsWith("/")) {
+        await sendTelegramMessage(chatId, "What's the reason you'd like access? Just reply with a short message.");
+      } else {
+        await submitAccessReason(chatId, text);
+        const ownerChatId = getOwnerChatId();
+        if (ownerChatId) {
+          await sendTelegramMessageWithKeyboard(
+            ownerChatId,
+            `📥 Access request\n\nFrom: ${formatDisplayName(message.from)} (${chatId})\nReason: ${text.trim().slice(0, 500)}`,
+            [[
+              { text: "✅ Approve", callback_data: `approve:${chatId}` },
+              { text: "❌ Deny", callback_data: `deny:${chatId}` },
+            ]]
+          );
+        }
+        await sendTelegramMessage(chatId, "Thanks — I've sent your request to the owner. I'll let you know as soon as they respond.");
+      }
+      res.status(200).send("OK");
+      return;
+    }
+
+    if (accessStatus === "pending") {
+      await sendTelegramMessage(chatId, "Your access request is still waiting on the owner — I'll let you know as soon as there's a decision.");
+      res.status(200).send("OK");
+      return;
+    }
+
+    if (accessStatus === "denied") {
+      await sendTelegramMessageWithKeyboard(
+        chatId,
+        "Your previous access request was declined. You're welcome to try again with more detail on why you'd like access.",
+        [[{ text: "🔓 Request Again", callback_data: "request_access" }]]
+      );
+      res.status(200).send("OK");
+      return;
+    }
+
+    // accessStatus === "none" — never requested before.
+    await sendTelegramMessageWithKeyboard(
+      chatId,
+      "🤖 This bot was made by Nahom (NF). It's private — but you're welcome to request access below.",
+      [[{ text: "🔓 Request Access", callback_data: "request_access" }]]
+    );
     res.status(200).send("OK");
     return;
   }
 
-  const text = message.text;
-
   if (text === "/start") {
     await sendStartMessage(chatId);
+    res.status(200).send("OK");
+    return;
+  }
+
+  if (text === "/users" && isOwner(chatId)) {
+    const users = await listApprovedUsers();
+    if (users.length === 0) {
+      await sendTelegramMessage(chatId, "No approved users yet.");
+    } else {
+      const keyboard = users.map((u) => [
+        { text: `🗑️ Remove ${u.displayName || u.telegramUserId}`, callback_data: `remove:${u.telegramUserId}` },
+      ]);
+      await sendTelegramMessageWithKeyboard(chatId, `Approved users (${users.length}):`, keyboard);
+    }
     res.status(200).send("OK");
     return;
   }

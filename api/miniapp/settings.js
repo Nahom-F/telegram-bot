@@ -14,7 +14,7 @@ import { userSettings } from "../../db/schema.js";
 import { requireTelegramUser } from "../../lib/telegramAuth.js";
 
 export default async function handler(req, res) {
-  const user = requireTelegramUser(req, res);
+  const user = await requireTelegramUser(req, res);
   if (!user) return;
 
   if (req.method === "GET") {

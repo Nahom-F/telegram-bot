@@ -19,6 +19,7 @@
     --button-text: var(--tg-theme-button-text-color, #ffffff);
     --header-bg: var(--tg-theme-header-bg-color, var(--secondary-bg));
     --section-separator: rgba(127, 127, 127, 0.2);
+    --tg-content-safe-top: 0px; /* set from JS via contentSafeAreaInset */
   }
 
   /* Manual overrides for the Settings theme toggle — "System" (default)
@@ -144,6 +145,7 @@
     text-align: center;
     gap: 8px;
     padding: 32px 20px 20px;
+    padding-top: calc(32px + var(--tg-content-safe-top));
     border-bottom: 1px solid var(--section-separator);
   }
   .menu-avatar {
@@ -205,6 +207,7 @@
     align-items: center;
     gap: 8px;
     padding: 14px 12px;
+    padding-top: calc(14px + var(--tg-content-safe-top));
     background: var(--header-bg);
     border-bottom: 1px solid var(--section-separator);
     flex-shrink: 0;
@@ -573,6 +576,17 @@
   tg?.expand();
   tg?.disableVerticalSwipes?.();
 
+  // Telegram overlays its own Close / chevron / "..." controls on top of
+  // the page near the top edge — contentSafeAreaInset.top tells us exactly
+  // how much space they take up, so our own header can pad itself clear
+  // instead of being hidden underneath them.
+  function applyContentSafeArea() {
+    const top = tg?.contentSafeAreaInset?.top ?? 0;
+    document.documentElement.style.setProperty("--tg-content-safe-top", `${top}px`);
+  }
+  applyContentSafeArea();
+  tg?.onEvent?.("contentSafeAreaChanged", applyContentSafeArea);
+
   const initData = tg?.initData || "";
 
   const appEl = document.getElementById("app");
@@ -614,7 +628,7 @@
     });
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({}));
-      throw new Error(body.error || `Request failed (${resp.status})`);
+      throw new Error(body.message || body.error || `Request failed (${resp.status})`);
     }
     return resp.json();
   }

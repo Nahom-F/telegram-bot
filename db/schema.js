@@ -63,3 +63,19 @@ export const messages = pgTable(
     chatIdx: index("messages_chat_id_idx").on(table.chatId),
   })
 );
+
+// One row per Telegram user who has ever interacted with the access
+// system — the whole lifecycle lives in `status`, so this one table is
+// the single source of truth for both the DM bot and the mini app:
+//   awaiting_reason -> pending -> approved | denied
+// The owner (OWNER_CHAT_ID) never gets a row here — they're always
+// implicitly approved, checked separately in lib/access.js.
+export const accessRequests = pgTable("access_requests", {
+  telegramUserId: bigint("telegram_user_id", { mode: "number" }).primaryKey(),
+  status: text("status").notNull(), // awaiting_reason | pending | approved | denied
+  displayName: text("display_name"),
+  reason: text("reason"),
+  requestedAt: timestamp("requested_at").notNull().defaultNow(),
+  decidedAt: timestamp("decided_at"),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
