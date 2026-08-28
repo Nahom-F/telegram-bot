@@ -167,16 +167,23 @@ async function askGroq(prompt) {
   return text;
 }
 
+// Groq goes first here (not Gemini) purely for speed — Groq's custom
+// hardware is built for low-latency inference, and it was previously only
+// ever used as a fallback, so its speed was going unused for the common
+// case. Trade-off: Gemini was originally primary because it's the
+// strongest model on Gemini's free tier, so this trades a little of that
+// quality margin for consistently faster replies. Vision/documents are
+// untouched below — they stay Gemini-only either way.
 async function getAiReply(prompt) {
   try {
-    return await askGemini(prompt);
+    return await askGroq(prompt);
   } catch (err) {
-    console.warn("Gemini failed, falling back to Groq:", err.message);
+    console.warn("Groq failed, falling back to Gemini:", err.message);
     try {
-      return await askGroq(prompt);
+      return await askGemini(prompt);
     } catch (err2) {
-      console.error("Groq also failed:", err2.message);
-      return "⚠️ Both Gemini and Groq failed to respond just now — try again in a moment.";
+      console.error("Gemini also failed:", err2.message);
+      return "⚠️ Both Groq and Gemini failed to respond just now — try again in a moment.";
     }
   }
 }
@@ -335,7 +342,7 @@ export default async function handler(req, res) {
         "answer it directly. Otherwise, describe what's in the image.";
 
     try {
-      await sendTypingAction(chatId);
+      sendTypingAction(chatId); // fire-and-forget — already swallows its own errors
       const fileUrl = await getTelegramFileUrl(largest.file_id);
       const { base64 } = await fetchAsBase64(fileUrl);
       // Telegram re-compresses every "photo" upload to JPEG server-side,
@@ -377,7 +384,7 @@ export default async function handler(req, res) {
     }
 
     try {
-      await sendTypingAction(chatId);
+      sendTypingAction(chatId); // fire-and-forget — already swallows its own errors
       const fileUrl = await getTelegramFileUrl(doc.file_id);
 
       if (mimeType === "application/pdf" || lowerName.endsWith(".pdf")) {
@@ -453,7 +460,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  await sendTypingAction(chatId);
+  sendTypingAction(chatId); // fire-and-forget — already swallows its own errors
   const reply = await getAiReply(text);
   await sendTelegramMessage(chatId, reply);
   res.status(200).send("OK");
