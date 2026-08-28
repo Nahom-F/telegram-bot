@@ -14,7 +14,7 @@ import { db } from "../../db/client.js";
 import { chats, messages } from "../../db/schema.js";
 import { requireTelegramUser } from "../../lib/telegramAuth.js";
 import { getConversationReply } from "../../lib/ai.js";
-import { isMemoryEnabled, getMemoryContext } from "../../lib/memory.js";
+import { isMemoryEnabled, listMemories, saveMemory, extractMemoryMarker, MEMORY_LIMIT } from "../../lib/memory.js";
 
 async function loadOwnedChat(chatId, telegramUserId) {
   const [chat] = await db
@@ -60,14 +60,6 @@ export default async function handler(req, res) {
       return;
     }
 
-    // Checked before inserting, so this reliably tells us whether the
-    // message we're about to add is the very first one in this chat —
-    // that's the only moment the memory bridge should kick in.
-    const priorCount = (
-      await db.select().from(messages).where(eq(messages.chatId, chat.id))
-    ).length;
-    const isFirstMessage = priorCount === 0;
-
     await db.insert(messages).values({ chatId: chat.id, role: "user", content: content.trim() });
 
     const history = await db
@@ -76,19 +68,29 @@ export default async function handler(req, res) {
       .where(eq(messages.chatId, chat.id))
       .orderBy(asc(messages.createdAt));
 
-    let memoryContext;
-    if (isFirstMessage && (await isMemoryEnabled(user.id))) {
-      memoryContext = await getMemoryContext(user.id, chat.id);
-    }
+    const memoryOn = await isMemoryEnabled(user.id);
+    const savedMemories = memoryOn ? (await listMemories(user.id)).map((m) => m.content) : [];
 
-    const reply = await getConversationReply(
+    const rawReply = await getConversationReply(
       history.map((m) => ({ role: m.role, content: m.content })),
-      memoryContext
+      { savedMemories, allowMemorySave: memoryOn }
     );
+
+    // If the model flagged that the user asked it to remember something,
+    // save it and strip the marker out before anyone sees it. If memory's
+    // already full, don't save — just say so, rather than silently
+    // dropping what they asked to keep.
+    let { visibleReply, savedFact } = extractMemoryMarker(rawReply);
+    if (savedFact) {
+      const result = await saveMemory(user.id, savedFact);
+      if (!result.saved && result.reason === "limit") {
+        visibleReply += `\n\n(Your memory is full — ${MEMORY_LIMIT}/${MEMORY_LIMIT} saved. Remove one in Settings to save this.)`;
+      }
+    }
 
     const [assistantMessage] = await db
       .insert(messages)
-      .values({ chatId: chat.id, role: "assistant", content: reply })
+      .values({ chatId: chat.id, role: "assistant", content: visibleReply })
       .returning();
 
     // Bumping updatedAt keeps the chat list sorted by most-recently-active.

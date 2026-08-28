@@ -1,12 +1,11 @@
 -- Run this once in your Neon project's SQL editor to set up the schema
--- from scratch. If you already ran the original version of this file,
--- use db/migrate_memory.sql instead — it only adds what's new.
+-- from scratch. If you already have tables from an earlier version, use
+-- the incremental db/migrate_*.sql files instead.
 
 CREATE TABLE IF NOT EXISTS chats (
   id SERIAL PRIMARY KEY,
   telegram_user_id BIGINT NOT NULL,
   title TEXT NOT NULL DEFAULT 'New chat',
-  summary TEXT,
   created_at TIMESTAMP NOT NULL DEFAULT now(),
   updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
@@ -27,3 +26,12 @@ CREATE TABLE IF NOT EXISTS user_settings (
   created_at TIMESTAMP NOT NULL DEFAULT now(),
   updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS memories (
+  id SERIAL PRIMARY KEY,
+  telegram_user_id BIGINT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT now(),
+  updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS memories_telegram_user_id_idx ON memories(telegram_user_id);

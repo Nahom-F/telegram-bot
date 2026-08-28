@@ -13,10 +13,6 @@ export const chats = pgTable(
     // Telegram user IDs are up to 64-bit — bigint avoids overflow.
     telegramUserId: bigint("telegram_user_id", { mode: "number" }).notNull(),
     title: text("title").notNull().default("New chat"),
-    // Short AI-generated summary of this chat, generated lazily the first
-    // time another chat needs it for the "remember across chats" bridge —
-    // not populated eagerly, so it stays null until it's actually used.
-    summary: text("summary"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
@@ -34,6 +30,23 @@ export const userSettings = pgTable("user_settings", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+// Explicit, user-controlled memory — one row per fact the user asked the
+// bot to remember (or added manually in Settings). Not tied to any chat;
+// capped per user in lib/memory.js, not here.
+export const memories = pgTable(
+  "memories",
+  {
+    id: serial("id").primaryKey(),
+    telegramUserId: bigint("telegram_user_id", { mode: "number" }).notNull(),
+    content: text("content").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdx: index("memories_telegram_user_id_idx").on(table.telegramUserId),
+  })
+);
 
 export const messages = pgTable(
   "messages",
