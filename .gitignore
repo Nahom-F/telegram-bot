@@ -13,4 +13,7 @@
 #files
 setup.sql
 migrate_memories_v2.sql
+migrate_access_v3.sql
+migrate_limits_v4.sql
+migrate_attachments_v5.sql
 migrate_memories.sql
