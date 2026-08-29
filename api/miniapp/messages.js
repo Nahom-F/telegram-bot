@@ -1,9 +1,15 @@
 // api/miniapp/messages.js
 //
-// GET  ?chatId=123          -> full message history for that chat
-// POST { chatId, content }  -> saves the user's message, asks the AI with
-//                              the whole thread as context, saves and
-//                              returns its reply
+// GET  ?chatId=123 -> full message history for that chat
+// POST { chatId, content, attachmentUrl?, attachmentName?, attachmentType?,
+//        attachmentBytes? } -> saves the user's message (with an
+//        attachment if one was uploaded first — see blob-upload.js),
+//        gets an AI reply, saves and returns it
+//
+// An attachment is analyzed on its own (image/PDF via vision, .docx/.txt
+// via text extraction) plus whatever caption came with it — not folded
+// into the running conversation history/memory machinery, same choice the
+// DM bot already makes for photos and documents.
 //
 // Every chat is checked against the calling Telegram user's id before any
 // read or write — there's no way to touch a chat that isn't yours, even if
@@ -14,8 +20,9 @@ import { db } from "../../db/client.js";
 import { chats, messages } from "../../db/schema.js";
 import { requireTelegramUser } from "../../lib/telegramAuth.js";
 import { getConversationReply } from "../../lib/ai.js";
+import { analyzeAttachment } from "../../lib/attachments.js";
 import { isMemoryEnabled, listMemories, saveMemory, extractMemoryMarker, MEMORY_LIMIT } from "../../lib/memory.js";
-import { checkMessageLimit, recordMessageUsage } from "../../lib/limits.js";
+import { checkMessageLimit, recordMessageUsage, recordFileUsage } from "../../lib/limits.js";
 
 async function loadOwnedChat(chatId, telegramUserId) {
   const [chat] = await db
@@ -50,9 +57,12 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "POST") {
-    const { chatId, content } = req.body || {};
-    if (!chatId || !content || !content.trim()) {
-      res.status(400).json({ error: "chatId and content are required" });
+    const { chatId, content, attachmentUrl, attachmentName, attachmentType, attachmentBytes } = req.body || {};
+    const hasAttachment = !!attachmentUrl;
+    const trimmedContent = (content || "").trim();
+
+    if (!chatId || (!trimmedContent && !hasAttachment)) {
+      res.status(400).json({ error: "chatId and content (or an attachment) are required" });
       return;
     }
     const chat = await loadOwnedChat(Number(chatId), user.id);
@@ -69,27 +79,49 @@ export default async function handler(req, res) {
       return;
     }
 
-    await db.insert(messages).values({ chatId: chat.id, role: "user", content: content.trim() });
+    const displayContent = trimmedContent || (hasAttachment ? `📎 ${attachmentName}` : "");
 
-    const history = await db
-      .select()
-      .from(messages)
-      .where(eq(messages.chatId, chat.id))
-      .orderBy(asc(messages.createdAt));
+    await db.insert(messages).values({
+      chatId: chat.id,
+      role: "user",
+      content: displayContent,
+      attachmentUrl: hasAttachment ? attachmentUrl : null,
+      attachmentName: hasAttachment ? attachmentName : null,
+      attachmentType: hasAttachment ? attachmentType : null,
+    });
 
-    const memoryOn = await isMemoryEnabled(user.id);
-    const savedMemories = memoryOn ? (await listMemories(user.id)).map((m) => m.content) : [];
+    let rawReply, tokensUsed;
 
-    const { text: rawReply, tokensUsed } = await getConversationReply(
-      history.map((m) => ({ role: m.role, content: m.content })),
-      { savedMemories, allowMemorySave: memoryOn }
-    );
+    if (hasAttachment) {
+      const result = await analyzeAttachment(attachmentUrl, attachmentName, attachmentType, trimmedContent);
+      rawReply = result.text;
+      tokensUsed = result.tokensUsed;
+      await recordFileUsage(user.id, attachmentBytes || null);
+    } else {
+      const history = await db
+        .select()
+        .from(messages)
+        .where(eq(messages.chatId, chat.id))
+        .orderBy(asc(messages.createdAt));
+
+      const memoryOn = await isMemoryEnabled(user.id);
+      const savedMemories = memoryOn ? (await listMemories(user.id)).map((m) => m.content) : [];
+
+      const result = await getConversationReply(
+        history.map((m) => ({ role: m.role, content: m.content })),
+        { savedMemories, allowMemorySave: memoryOn }
+      );
+      rawReply = result.text;
+      tokensUsed = result.tokensUsed;
+    }
     await recordMessageUsage(user.id, tokensUsed);
 
     // If the model flagged that the user asked it to remember something,
     // save it and strip the marker out before anyone sees it. If memory's
     // already full, don't save — just say so, rather than silently
-    // dropping what they asked to keep.
+    // dropping what they asked to keep. (Attachments never trigger this —
+    // analyzeAttachment doesn't pass allowMemorySave — so savedFact is
+    // always null on that path.)
     let { visibleReply, savedFact } = extractMemoryMarker(rawReply);
     if (savedFact) {
       const result = await saveMemory(user.id, savedFact);
@@ -109,8 +141,8 @@ export default async function handler(req, res) {
     // Auto-title a brand-new chat from its first message, so the chat list
     // doesn't just show a wall of identical "New chat" entries.
     if (chat.title === "New chat") {
-      const trimmed = content.trim();
-      const autoTitle = trimmed.length > 40 ? `${trimmed.slice(0, 40)}…` : trimmed;
+      const titleSource = trimmedContent || attachmentName || "New chat";
+      const autoTitle = titleSource.length > 40 ? `${titleSource.slice(0, 40)}…` : titleSource;
       await db.update(chats).set({ title: autoTitle }).where(eq(chats.id, chat.id));
     }
 

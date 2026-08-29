@@ -334,6 +334,47 @@
     background: var(--bg);
     flex-shrink: 0;
   }
+  #attach-btn {
+    font-size: 20px;
+    padding: 6px 4px;
+    flex-shrink: 0;
+  }
+  .attachment-chip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 0 10px 6px;
+    padding: 7px 12px;
+    background: var(--secondary-bg);
+    border-radius: 10px;
+    font-size: 13px;
+  }
+  .attachment-chip span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .attachment-chip button {
+    background: none;
+    border: none;
+    color: var(--hint);
+    font-size: 14px;
+    padding: 2px 4px;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .bubble-attachment-image {
+    max-width: 100%;
+    border-radius: 10px;
+    display: block;
+    margin-bottom: 6px;
+  }
+  .bubble-attachment-file {
+    font-size: 13px;
+    opacity: 0.85;
+    margin-bottom: 4px;
+  }
   #input {
     flex: 1;
     resize: none;
@@ -514,7 +555,13 @@
       <h1 id="chat-title">Chat</h1>
     </header>
     <div id="messages" class="messages"></div>
+    <div id="attachment-chip" class="attachment-chip" hidden>
+      <span id="attachment-chip-name"></span>
+      <button type="button" id="remove-attachment-btn" aria-label="Remove attachment">✕</button>
+    </div>
     <form id="composer" class="composer">
+      <button type="button" id="attach-btn" class="icon-btn" aria-label="Attach file">📎</button>
+      <input type="file" id="file-input" accept="image/*,application/pdf,.docx,.txt" hidden />
       <textarea id="input" placeholder="Message" rows="1"></textarea>
       <button id="send-btn" class="send-btn" type="submit" aria-label="Send">➤</button>
     </form>
@@ -587,7 +634,13 @@
   </div>
 </aside>
 
-<script>
+<script type="module">
+  // ESM import via CDN since this is a single static file with no build
+  // step — @vercel/blob/client is Vercel's own browser-side helper, pinned
+  // to match the version in package.json so it can't drift out of sync
+  // with the server-side handleUpload() in api/miniapp/blob-upload.js.
+  import { upload } from "https://esm.sh/@vercel/blob@2.8.0/client";
+
   // Edit this to your bot's real display name — it drives the splash
   // screen, the menu header, and the page title. The logo itself is
   // public/logo.jpg, referenced directly in the HTML below.
@@ -619,6 +672,11 @@
   const composerEl = document.getElementById("composer");
   const inputEl = document.getElementById("input");
   const sendBtn = document.getElementById("send-btn");
+  const attachBtn = document.getElementById("attach-btn");
+  const fileInputEl = document.getElementById("file-input");
+  const attachmentChipEl = document.getElementById("attachment-chip");
+  const attachmentChipNameEl = document.getElementById("attachment-chip-name");
+  const removeAttachmentBtn = document.getElementById("remove-attachment-btn");
   const newChatBtn = document.getElementById("new-chat-fab");
   const backBtn = document.getElementById("back-btn");
   const menuBtn = document.getElementById("menu-btn");
@@ -645,6 +703,7 @@
   document.getElementById("menu-bot-name").textContent = BOT_NAME;
 
   let activeChatId = null;
+  let pendingFile = null;
 
   async function apiFetch(path, options = {}) {
     const resp = await fetch(path, {
@@ -1023,10 +1082,31 @@
       `<div class="auth-error">Couldn't load your chats — open this from the bot inside Telegram.<br><br>(${message})</div>`;
   }
 
-  function renderBubble(role, content) {
+  function renderBubble(role, content, attachment) {
     const el = document.createElement("div");
     el.className = `bubble ${role}`;
-    el.textContent = content;
+
+    if (attachment) {
+      if (attachment.type && attachment.type.startsWith("image/") && attachment.url) {
+        const img = document.createElement("img");
+        img.className = "bubble-attachment-image";
+        img.src = attachment.url;
+        img.alt = attachment.name || "";
+        el.appendChild(img);
+      } else {
+        const chip = document.createElement("div");
+        chip.className = "bubble-attachment-file";
+        chip.textContent = `📎 ${attachment.name || "file"}`;
+        el.appendChild(chip);
+      }
+    }
+
+    if (content) {
+      const textEl = document.createElement("div");
+      textEl.textContent = content;
+      el.appendChild(textEl);
+    }
+
     messagesEl.appendChild(el);
     return el;
   }
@@ -1050,7 +1130,12 @@
     showChatView();
     try {
       const history = await apiFetch(`/api/miniapp/messages?chatId=${chatId}`);
-      for (const m of history) renderBubble(m.role, m.content);
+      for (const m of history) {
+        const attachment = m.attachmentUrl
+          ? { url: m.attachmentUrl, name: m.attachmentName, type: m.attachmentType }
+          : null;
+        renderBubble(m.role, m.content, attachment);
+      }
       scrollMessagesToBottom();
     } catch (err) {
       renderBubble("error", `Couldn't load this chat: ${err.message}`);
@@ -1075,6 +1160,28 @@
     loadChats();
   });
 
+  attachBtn.addEventListener("click", () => fileInputEl.click());
+
+  fileInputEl.addEventListener("change", () => {
+    const file = fileInputEl.files[0];
+    if (!file) return;
+    if (file.size > 50 * 1024 * 1024) {
+      const msg = "That file's too big — the limit is 50MB.";
+      tg?.showAlert?.(msg) ?? alert(msg);
+      fileInputEl.value = "";
+      return;
+    }
+    pendingFile = file;
+    attachmentChipNameEl.textContent = file.name;
+    attachmentChipEl.hidden = false;
+  });
+
+  removeAttachmentBtn.addEventListener("click", () => {
+    pendingFile = null;
+    fileInputEl.value = "";
+    attachmentChipEl.hidden = true;
+  });
+
   inputEl.addEventListener("input", () => {
     inputEl.style.height = "auto";
     inputEl.style.height = `${inputEl.scrollHeight}px`;
@@ -1090,30 +1197,53 @@
   composerEl.addEventListener("submit", async (e) => {
     e.preventDefault();
     const text = inputEl.value.trim();
-    if (!text || !activeChatId) return;
+    const file = pendingFile;
+    if ((!text && !file) || !activeChatId) return;
 
     tg?.HapticFeedback?.impactOccurred?.("light");
     inputEl.value = "";
     inputEl.style.height = "auto";
     sendBtn.disabled = true;
+    attachBtn.disabled = true;
 
-    renderBubble("user", text);
+    renderBubble("user", text, file ? { name: file.name, type: file.type } : null);
     const typingEl = renderTypingBubble();
     scrollMessagesToBottom();
 
+    let attachmentFields = {};
     try {
+      if (file) {
+        // Uploads straight to Vercel Blob from the browser — never passes
+        // through our own function, so the 4.5MB request-body limit never
+        // applies. blob-upload.js issues the token this call uses.
+        const blob = await upload(file.name, file, {
+          access: "public",
+          handleUploadUrl: "/api/miniapp/blob-upload",
+        });
+        attachmentFields = {
+          attachmentUrl: blob.url,
+          attachmentName: file.name,
+          attachmentType: file.type,
+          attachmentBytes: file.size,
+        };
+      }
+      pendingFile = null;
+      fileInputEl.value = "";
+      attachmentChipEl.hidden = true;
+
       const reply = await apiFetch("/api/miniapp/messages", {
         method: "POST",
-        body: JSON.stringify({ chatId: activeChatId, content: text }),
+        body: JSON.stringify({ chatId: activeChatId, content: text, ...attachmentFields }),
       });
       typingEl.remove();
       renderBubble("assistant", reply.content);
     } catch (err) {
       typingEl.remove();
       renderBubble("error", `Couldn't send that: ${err.message}`);
-      inputEl.value = text; // give the message back instead of losing it
+      if (!attachmentFields.attachmentUrl) inputEl.value = text; // give the text back if the upload itself never went through
     } finally {
       sendBtn.disabled = false;
+      attachBtn.disabled = false;
       scrollMessagesToBottom();
     }
   });

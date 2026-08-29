@@ -57,6 +57,12 @@ export const messages = pgTable(
       .references(() => chats.id, { onDelete: "cascade" }),
     role: text("role").notNull(), // "user" | "assistant"
     content: text("content").notNull(),
+    // Optional — set only on a user message that included an upload. The
+    // file itself lives in Vercel Blob; this just points at it so the
+    // bubble can render a thumbnail/file chip later.
+    attachmentUrl: text("attachment_url"),
+    attachmentName: text("attachment_name"),
+    attachmentType: text("attachment_type"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (table) => ({

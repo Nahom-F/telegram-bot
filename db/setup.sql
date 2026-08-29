@@ -16,6 +16,9 @@ CREATE TABLE IF NOT EXISTS messages (
   chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
   role TEXT NOT NULL,
   content TEXT NOT NULL,
+  attachment_url TEXT,
+  attachment_name TEXT,
+  attachment_type TEXT,
   created_at TIMESTAMP NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS messages_chat_id_idx ON messages(chat_id);

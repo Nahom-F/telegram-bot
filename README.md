@@ -129,6 +129,26 @@ reachable by anyone but the Telegram user who made it.
 4. Redeploy. The bot's `/start` message will now also include an "Open
    Chat App" inline button (it only appears once `MINI_APP_URL` is set).
 
+### File / photo uploads
+
+Tap 📎 in the composer to attach an image, PDF, `.docx`, or `.txt` file —
+same set of types the DM bot reads, same 50MB cap non-owner users get
+everywhere else.
+
+**Why this needed its own storage:** Vercel serverless functions cap a
+request body at 4.5MB — far below 50MB — so the file can't be POSTed
+through one of our own API routes. Instead, the browser uploads directly
+to **Vercel Blob** storage, and `api/miniapp/blob-upload.js` only ever
+issues a short-lived, size/type-limited upload token — the file bytes
+never pass through our server on the way up.
+
+Setup:
+
+1. In Vercel's Storage tab, create a **new** Blob store for this project
+   (not one you're already using elsewhere) — this sets
+   `BLOB_READ_WRITE_TOKEN` for you automatically.
+2. That's it — no further config. Redeploy and the 📎 button works.
+
 ## Image generation
 
 - Uses Pollinations.ai's `image.pollinations.ai` endpoint — genuinely free,
