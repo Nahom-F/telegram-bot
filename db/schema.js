@@ -79,3 +79,23 @@ export const accessRequests = pgTable("access_requests", {
   decidedAt: timestamp("decided_at"),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+// One row per usage event (a message answered, or a file processed) — a
+// log rather than a running counter, so "messages in the last hour" is a
+// real rolling window (ages out naturally) rather than a fixed clock-hour
+// bucket. Tokens come straight from the AI providers' own usage figures in
+// their responses, not an estimate.
+export const usageEvents = pgTable(
+  "usage_events",
+  {
+    id: serial("id").primaryKey(),
+    telegramUserId: bigint("telegram_user_id", { mode: "number" }).notNull(),
+    kind: text("kind").notNull(), // "message" | "file"
+    tokens: integer("tokens"),
+    bytes: integer("bytes"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => ({
+    userTimeIdx: index("usage_events_user_time_idx").on(table.telegramUserId, table.createdAt),
+  })
+);

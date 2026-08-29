@@ -15,6 +15,7 @@ import { chats, messages } from "../../db/schema.js";
 import { requireTelegramUser } from "../../lib/telegramAuth.js";
 import { getConversationReply } from "../../lib/ai.js";
 import { isMemoryEnabled, listMemories, saveMemory, extractMemoryMarker, MEMORY_LIMIT } from "../../lib/memory.js";
+import { checkMessageLimit, recordMessageUsage } from "../../lib/limits.js";
 
 async function loadOwnedChat(chatId, telegramUserId) {
   const [chat] = await db
@@ -60,6 +61,14 @@ export default async function handler(req, res) {
       return;
     }
 
+    // Checked before spending an AI call, not after — no point burning a
+    // request just to refuse to show its result.
+    const limitCheck = await checkMessageLimit(user.id);
+    if (!limitCheck.allowed) {
+      res.status(429).json({ error: "rate_limited", message: limitCheck.reason });
+      return;
+    }
+
     await db.insert(messages).values({ chatId: chat.id, role: "user", content: content.trim() });
 
     const history = await db
@@ -71,10 +80,11 @@ export default async function handler(req, res) {
     const memoryOn = await isMemoryEnabled(user.id);
     const savedMemories = memoryOn ? (await listMemories(user.id)).map((m) => m.content) : [];
 
-    const rawReply = await getConversationReply(
+    const { text: rawReply, tokensUsed } = await getConversationReply(
       history.map((m) => ({ role: m.role, content: m.content })),
       { savedMemories, allowMemorySave: memoryOn }
     );
+    await recordMessageUsage(user.id, tokensUsed);
 
     // If the model flagged that the user asked it to remember something,
     // save it and strip the marker out before anyone sees it. If memory's

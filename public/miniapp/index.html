@@ -159,6 +159,16 @@
   .menu-bot-name { font-size: 16.5px; font-weight: 600; }
   .menu-designer { font-size: 12.5px; color: var(--hint); }
   .menu-list { padding: 10px 0; flex: 1; }
+  .menu-usage {
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--section-separator);
+  }
+  .menu-usage-row {
+    font-size: 12.5px;
+    color: var(--hint);
+    text-align: center;
+    line-height: 1.6;
+  }
   .menu-item {
     width: 100%;
     display: flex;
@@ -544,6 +554,14 @@
         <div id="memory-list"></div>
         <button type="button" class="menu-item" id="add-memory-btn" style="padding: 10px 0 2px;">+ Add memory</button>
       </div>
+      <div class="settings-section" id="users-section" hidden>
+        <div class="settings-label" style="margin-bottom: 8px;">Pending requests</div>
+        <div id="pending-list"></div>
+      </div>
+      <div class="settings-section" id="approved-section" hidden>
+        <div class="settings-label" style="margin-bottom: 8px;">Approved users</div>
+        <div id="approved-list"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -554,6 +572,10 @@
     <div class="menu-avatar"><img src="/logo.jpg" alt="" /></div>
     <div class="menu-bot-name" id="menu-bot-name"></div>
     <div class="menu-designer">Designed by Nahom (NF)</div>
+  </div>
+  <div class="menu-usage" id="menu-usage" hidden>
+    <div class="menu-usage-row" id="menu-usage-messages"></div>
+    <div class="menu-usage-row" id="menu-usage-tokens"></div>
   </div>
   <nav class="menu-list">
     <button class="menu-item" id="open-settings-btn">
@@ -610,6 +632,13 @@
   const memoryListEl = document.getElementById("memory-list");
   const memoryCountEl = document.getElementById("memory-count");
   const addMemoryBtn = document.getElementById("add-memory-btn");
+  const menuUsageEl = document.getElementById("menu-usage");
+  const menuUsageMessagesEl = document.getElementById("menu-usage-messages");
+  const menuUsageTokensEl = document.getElementById("menu-usage-tokens");
+  const usersSectionEl = document.getElementById("users-section");
+  const approvedSectionEl = document.getElementById("approved-section");
+  const pendingListEl = document.getElementById("pending-list");
+  const approvedListEl = document.getElementById("approved-list");
 
   document.title = BOT_NAME;
   document.getElementById("splash-name").textContent = BOT_NAME;
@@ -692,6 +721,7 @@
       menuOverlay.classList.add("visible");
       menuDrawer.classList.add("open");
     });
+    loadUsage();
   }
   function closeMenu() {
     menuOverlay.classList.remove("visible");
@@ -707,6 +737,7 @@
     showSettingsView();
     loadSettings();
     loadMemories();
+    loadUsers();
   });
   settingsBackBtn.addEventListener("click", showListView);
 
@@ -852,6 +883,113 @@
       }
     });
   });
+
+  // --- Usage strip (drawer menu) ---
+  async function loadUsage() {
+    try {
+      const data = await apiFetch("/api/miniapp/usage");
+      if (data.isOwner) {
+        menuUsageEl.hidden = true;
+        return;
+      }
+      menuUsageEl.hidden = false;
+      menuUsageMessagesEl.textContent = `${data.messagesLastHour}/${data.messagesPerHourLimit} messages this hour`;
+      menuUsageTokensEl.textContent = `${data.totalTokens.toLocaleString()}/${data.maxTokens.toLocaleString()} tokens used`;
+    } catch {
+      menuUsageEl.hidden = true; // fails closed — no usage shown rather than a broken row
+    }
+  }
+
+  // --- Users panel (owner only — the server independently re-checks this
+  // on every request; hiding the section here is just cleanliness, not
+  // the actual security boundary) ---
+  async function loadUsers() {
+    try {
+      const data = await apiFetch("/api/miniapp/users");
+      usersSectionEl.hidden = false;
+      approvedSectionEl.hidden = false;
+      renderPendingList(data.pending);
+      renderApprovedList(data.approved);
+    } catch {
+      usersSectionEl.hidden = true;
+      approvedSectionEl.hidden = true;
+    }
+  }
+
+  function renderPendingList(list) {
+    pendingListEl.innerHTML = "";
+    if (list.length === 0) {
+      pendingListEl.innerHTML = `<div class="memory-empty">No pending requests.</div>`;
+      return;
+    }
+    for (const reqRow of list) {
+      const row = document.createElement("div");
+      row.className = "memory-row";
+      row.innerHTML = `
+        <div class="memory-row-text"></div>
+        <div class="memory-row-actions">
+          <button type="button" class="memory-icon-btn" aria-label="Approve">✓</button>
+          <button type="button" class="memory-icon-btn" aria-label="Deny">✕</button>
+        </div>`;
+      row.querySelector(".memory-row-text").textContent =
+        `${reqRow.displayName || reqRow.telegramUserId} — ${reqRow.reason || "no reason given"}`;
+      const [approveBtn, denyBtn] = row.querySelectorAll(".memory-icon-btn");
+      approveBtn.addEventListener("click", () => decideRequest(reqRow.telegramUserId, "approve"));
+      denyBtn.addEventListener("click", () => decideRequest(reqRow.telegramUserId, "deny"));
+      pendingListEl.appendChild(row);
+    }
+  }
+
+  function renderApprovedList(list) {
+    approvedListEl.innerHTML = "";
+    if (list.length === 0) {
+      approvedListEl.innerHTML = `<div class="memory-empty">No approved users yet.</div>`;
+      return;
+    }
+    for (const u of list) {
+      const row = document.createElement("div");
+      row.className = "memory-row";
+      row.innerHTML = `
+        <div class="memory-row-text"></div>
+        <div class="memory-row-actions">
+          <button type="button" class="memory-icon-btn" aria-label="Remove">🗑️</button>
+        </div>`;
+      row.querySelector(".memory-row-text").textContent = u.displayName || u.telegramUserId;
+      row.querySelector(".memory-icon-btn").addEventListener("click", () => removeApprovedUser(u.telegramUserId));
+      approvedListEl.appendChild(row);
+    }
+  }
+
+  async function decideRequest(telegramUserId, action) {
+    try {
+      await apiFetch("/api/miniapp/users", {
+        method: "POST",
+        body: JSON.stringify({ telegramUserId, action }),
+      });
+      loadUsers();
+    } catch (err) {
+      tg?.showAlert?.(`Couldn't ${action}: ${err.message}`) ?? alert(`Couldn't ${action}: ${err.message}`);
+    }
+  }
+
+  function removeApprovedUser(telegramUserId) {
+    const doRemove = async () => {
+      try {
+        await apiFetch("/api/miniapp/users", {
+          method: "DELETE",
+          body: JSON.stringify({ telegramUserId }),
+        });
+        loadUsers();
+      } catch (err) {
+        tg?.showAlert?.(`Couldn't remove: ${err.message}`) ?? alert(`Couldn't remove: ${err.message}`);
+      }
+    };
+    if (tg?.showConfirm) {
+      tg.showConfirm("Remove this user's access?", (ok) => ok && doRemove());
+    } else if (confirm("Remove this user's access?")) {
+      doRemove();
+    }
+  }
 
   function renderChatList(chats) {
     chatListEl.innerHTML = "";

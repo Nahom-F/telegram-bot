@@ -54,6 +54,7 @@ import {
   removeUser,
   listApprovedUsers,
 } from "../lib/access.js";
+import { checkMessageLimit, recordMessageUsage } from "../lib/limits.js";
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -95,7 +96,8 @@ async function askGemini(prompt) {
   const data = await resp.json();
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error("Gemini returned no text");
-  return text;
+  const tokensUsed = data?.usageMetadata?.totalTokenCount ?? null;
+  return { text, tokensUsed };
 }
 
 // Same Gemini endpoint, just with an extra inline_data part — Gemini
@@ -179,7 +181,8 @@ async function askGroq(prompt) {
   const data = await resp.json();
   const text = data?.choices?.[0]?.message?.content;
   if (!text) throw new Error("Groq returned no text");
-  return text;
+  const tokensUsed = data?.usage?.total_tokens ?? null;
+  return { text, tokensUsed };
 }
 
 // Groq goes first here (not Gemini) purely for speed — Groq's custom
@@ -189,6 +192,7 @@ async function askGroq(prompt) {
 // strongest model on Gemini's free tier, so this trades a little of that
 // quality margin for consistently faster replies. Vision/documents are
 // untouched below — they stay Gemini-only either way.
+// Returns { text, tokensUsed }.
 async function getAiReply(prompt) {
   try {
     return await askGroq(prompt);
@@ -198,7 +202,7 @@ async function getAiReply(prompt) {
       return await askGemini(prompt);
     } catch (err2) {
       console.error("Gemini also failed:", err2.message);
-      return "⚠️ Both Groq and Gemini failed to respond just now — try again in a moment.";
+      return { text: "⚠️ Both Groq and Gemini failed to respond just now — try again in a moment.", tokensUsed: null };
     }
   }
 }
@@ -388,6 +392,7 @@ async function handleCallbackQuery(cq) {
     if (cq.message?.message_id) {
       await editMessageText(chatId, cq.message.message_id, "🗑️ Removed");
     }
+    await sendTelegramMessage(targetId, "Your access to this bot has been removed.");
     return;
   }
 
@@ -595,16 +600,28 @@ export default async function handler(req, res) {
         if (!docText.trim()) {
           await sendTelegramMessage(chatId, "⚠️ Couldn't find any text in that .docx file.");
         } else {
-          const prompt = `${question}\n\n--- Document text ---\n${docText.slice(0, 30000)}`;
-          const answer = await getAiReply(prompt);
-          await sendTelegramMessage(chatId, answer);
+          const limitCheck = await checkMessageLimit(chatId);
+          if (!limitCheck.allowed) {
+            await sendTelegramMessage(chatId, limitCheck.reason);
+          } else {
+            const prompt = `${question}\n\n--- Document text ---\n${docText.slice(0, 30000)}`;
+            const { text: answer, tokensUsed } = await getAiReply(prompt);
+            await recordMessageUsage(chatId, tokensUsed);
+            await sendTelegramMessage(chatId, answer);
+          }
         }
       } else if (mimeType.startsWith("text/") || lowerName.endsWith(".txt")) {
         const resp = await fetchWithTimeout(fileUrl, {}, 20000);
         const docText = await resp.text();
-        const prompt = `${question}\n\n--- Document text ---\n${docText.slice(0, 30000)}`;
-        const answer = await getAiReply(prompt);
-        await sendTelegramMessage(chatId, answer);
+        const limitCheck = await checkMessageLimit(chatId);
+        if (!limitCheck.allowed) {
+          await sendTelegramMessage(chatId, limitCheck.reason);
+        } else {
+          const prompt = `${question}\n\n--- Document text ---\n${docText.slice(0, 30000)}`;
+          const { text: answer, tokensUsed } = await getAiReply(prompt);
+          await recordMessageUsage(chatId, tokensUsed);
+          await sendTelegramMessage(chatId, answer);
+        }
       } else {
         // Old .doc, .pptx, .xlsx, etc. — not wired up yet.
         await sendTelegramMessage(
@@ -646,8 +663,16 @@ export default async function handler(req, res) {
     return;
   }
 
+  const limitCheck = await checkMessageLimit(chatId);
+  if (!limitCheck.allowed) {
+    await sendTelegramMessage(chatId, limitCheck.reason);
+    res.status(200).send("OK");
+    return;
+  }
+
   sendTypingAction(chatId); // fire-and-forget — already swallows its own errors
-  const reply = await getAiReply(text);
+  const { text: reply, tokensUsed } = await getAiReply(text);
+  await recordMessageUsage(chatId, tokensUsed);
   await sendTelegramMessage(chatId, reply);
   res.status(200).send("OK");
 }
