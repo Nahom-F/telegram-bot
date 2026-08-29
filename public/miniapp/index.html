@@ -1216,9 +1216,16 @@
         // Uploads straight to Vercel Blob from the browser — never passes
         // through our own function, so the 4.5MB request-body limit never
         // applies. blob-upload.js issues the token this call uses.
+        //
+        // clientPayload carries our Telegram auth through to
+        // onBeforeGenerateToken on the server — upload() makes its own
+        // internal request to handleUploadUrl and does not forward the
+        // X-Telegram-Init-Data header apiFetch() normally attaches, so
+        // this is the only reliable way to authenticate this call.
         const blob = await upload(file.name, file, {
           access: "public",
           handleUploadUrl: "/api/miniapp/blob-upload",
+          clientPayload: initData,
         });
         attachmentFields = {
           attachmentUrl: blob.url,
