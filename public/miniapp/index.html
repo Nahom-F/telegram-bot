@@ -1243,7 +1243,10 @@
         body: JSON.stringify({ chatId: activeChatId, content: text, ...attachmentFields }),
       });
       typingEl.remove();
-      renderBubble("assistant", reply.content);
+      const replyAttachment = reply.attachmentUrl
+        ? { url: reply.attachmentUrl, name: reply.attachmentName, type: reply.attachmentType }
+        : null;
+      renderBubble("assistant", reply.content, replyAttachment);
     } catch (err) {
       typingEl.remove();
       renderBubble("error", `Couldn't send that: ${err.message}`);

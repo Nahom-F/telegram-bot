@@ -6,6 +6,10 @@
 //        attachment if one was uploaded first — see blob-upload.js),
 //        gets an AI reply, saves and returns it
 //
+// content starting with "/image <description>" (no attachment) generates
+// an image via Pollinations instead of an AI text reply — same command as
+// the DM bot's /image, kept consistent across both surfaces.
+//
 // An attachment is analyzed on its own (image/PDF via vision, .docx/.txt
 // via text extraction) plus whatever caption came with it — not folded
 // into the running conversation history/memory machinery, same choice the
@@ -16,11 +20,13 @@
 // you guess its id.
 
 import { eq, and, asc } from "drizzle-orm";
+import { put } from "@vercel/blob";
 import { db } from "../../db/client.js";
 import { chats, messages } from "../../db/schema.js";
 import { requireTelegramUser } from "../../lib/telegramAuth.js";
 import { getConversationReply } from "../../lib/ai.js";
 import { analyzeAttachment } from "../../lib/attachments.js";
+import { generateImage } from "../../lib/imagegen.js";
 import { isMemoryEnabled, listMemories, saveMemory, extractMemoryMarker, MEMORY_LIMIT } from "../../lib/memory.js";
 import { checkMessageLimit, recordMessageUsage, recordFileUsage } from "../../lib/limits.js";
 
@@ -79,6 +85,14 @@ export default async function handler(req, res) {
       return;
     }
 
+    const imageMatch = !hasAttachment && trimmedContent.match(/^\/(image|img)\s+([\s\S]+)/i);
+    const isBareImageCommand = !hasAttachment && /^\/(image|img)$/i.test(trimmedContent);
+
+    if (isBareImageCommand) {
+      res.status(400).json({ error: "bad_command", message: "Send it like: /image a red fox in a snowy forest" });
+      return;
+    }
+
     const displayContent = trimmedContent || (hasAttachment ? `📎 ${attachmentName}` : "");
 
     await db.insert(messages).values({
@@ -89,6 +103,50 @@ export default async function handler(req, res) {
       attachmentName: hasAttachment ? attachmentName : null,
       attachmentType: hasAttachment ? attachmentType : null,
     });
+
+    // --- Image generation ("/image <description>") ---
+    // A completely separate path from the AI text/vision reply below —
+    // Pollinations returns image bytes directly, not something that goes
+    // through Gemini/Groq at all. The result gets uploaded to our own
+    // Blob store (not left pointing at Pollinations' URL) so it stays
+    // reliably viewable as part of this chat's history later.
+    if (imageMatch) {
+      const prompt = imageMatch[2].trim();
+      let assistantContent, attachment = null;
+      try {
+        const { buffer, mimeType } = await generateImage(prompt);
+        const blob = await put(`generated-images/${chat.id}-${Date.now()}.jpg`, buffer, {
+          access: "public",
+          contentType: mimeType,
+        });
+        assistantContent = `Generated: ${prompt}`;
+        attachment = { url: blob.url, name: `${prompt.slice(0, 40)}.jpg`, type: mimeType };
+      } catch (err) {
+        assistantContent = `⚠️ Couldn't generate that image: ${err.message}`;
+      }
+      await recordMessageUsage(user.id, null); // still counts toward messages/hour, no tokens involved
+
+      const [assistantMessage] = await db
+        .insert(messages)
+        .values({
+          chatId: chat.id,
+          role: "assistant",
+          content: assistantContent,
+          attachmentUrl: attachment?.url || null,
+          attachmentName: attachment?.name || null,
+          attachmentType: attachment?.type || null,
+        })
+        .returning();
+
+      await db.update(chats).set({ updatedAt: new Date() }).where(eq(chats.id, chat.id));
+      if (chat.title === "New chat") {
+        const autoTitle = prompt.length > 40 ? `${prompt.slice(0, 40)}…` : prompt;
+        await db.update(chats).set({ title: autoTitle }).where(eq(chats.id, chat.id));
+      }
+
+      res.status(201).json(assistantMessage);
+      return;
+    }
 
     let rawReply, tokensUsed;
 

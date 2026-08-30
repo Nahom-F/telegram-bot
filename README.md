@@ -129,6 +129,15 @@ reachable by anyone but the Telegram user who made it.
 4. Redeploy. The bot's `/start` message will now also include an "Open
    Chat App" inline button (it only appears once `MINI_APP_URL` is set).
 
+### Image generation
+
+Type `/image <description>` (or `/img`) in any chat — same command as the
+DM bot's `/image`, kept consistent across both surfaces. Generates via
+Pollinations, then re-uploads the result to your own Blob store (rather
+than leaving it pointing at Pollinations' URL) so it stays reliably
+viewable in that chat's history later. No extra setup — reuses the Blob
+store from file uploads above.
+
 ### File / photo uploads
 
 Tap 📎 in the composer to attach an image, PDF, `.docx`, or `.txt` file —
