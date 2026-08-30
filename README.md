@@ -208,6 +208,42 @@ All of this lives in `access_requests` in Neon (see `db/schema.js` and
 `lib/access.js`) — shared between the DM bot and the mini app, so there's
 one access list, not two that could drift out of sync.
 
+## Plans and limits
+
+Three tiers, checked against real usage (see `lib/limits.js`) — you, as
+owner, are exempt from all of it:
+
+| | Free | Pro (250 ⭐/mo) | Premium (500 ⭐/mo) |
+|---|---|---|---|
+| Messages/hour | 20 | 100 | ~1000 (effectively unlimited) |
+| Token allowance | 100,000 lifetime | 1,000,000 lifetime | 10,000,000 lifetime |
+| File size cap | 50MB | 200MB | 500MB |
+| Image generations | 3 / 30 days | 10 / 30 days | ~1000 / 30 days |
+
+**How payment works:** `/upgrade` in the DM, or the Upgrade section in the
+mini app's Settings — both create a real Telegram Stars **subscription**
+(`subscription_period` locked to 30 days by Telegram, not something we
+chose). The first charge happens the moment they pay; Telegram renews it
+automatically every 30 days after that and sends a fresh payment
+confirmation each time — there's no cron job or scheduler anywhere in this
+project doing that re-billing. A user cancels any time from Telegram's own
+subscription management UI; when they do, the subscription simply stops
+renewing and their access quietly reverts to Free once the current period
+ends — nothing here needs to react to a cancellation event specifically.
+
+Prices are Stars amounts in `lib/subscriptions.js` (`TIER_PRICES_STARS`) —
+change the numbers there to reprice; no other file needs touching.
+
+**On "premium" and the AI model:** Premium currently gets the same
+Groq/Gemini Flash models as everyone else — just higher numeric limits.
+Giving Premium a stronger model (e.g. a paid Gemini Pro tier) is a real
+option, but a materially different cost basis: Pro-tier Gemini runs
+roughly $2 per million input tokens / $12 per million output tokens (no
+free tier), versus $0 for Flash. If you want to add that later, it's a
+model-selection change in `lib/ai.js` gated on tier — but reprice Premium
+first if you do, since 500 Stars/month (~$5) doesn't cover a heavy user's
+worth of Pro-tier tokens on its own.
+
 ## Notes
 
 - **Developer credit.** Shows in the `/start` reply and in the access

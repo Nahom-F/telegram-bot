@@ -17,3 +17,4 @@ migrate_access_v3.sql
 migrate_limits_v4.sql
 migrate_attachments_v5.sql
 migrate_memories.sql
+migrate_subscriptions_v6.sql

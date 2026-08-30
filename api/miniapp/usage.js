@@ -1,12 +1,13 @@
 // api/miniapp/usage.js
 //
-// GET -> the calling user's current usage against their limits, or
-// { isOwner: true } if they're not limited at all. Powers the small usage
-// line in the mini app's menu drawer.
+// GET -> the calling user's current usage and tier, or { isOwner: true }
+// if they're not limited at all. Powers the usage line in the mini app's
+// menu drawer.
 
 import { requireTelegramUser } from "../../lib/telegramAuth.js";
 import { isOwner } from "../../lib/access.js";
-import { getUsageSummary, DEFAULT_LIMITS } from "../../lib/limits.js";
+import { getUserTier } from "../../lib/subscriptions.js";
+import { getUsageSummary, TIER_LIMITS } from "../../lib/limits.js";
 
 export default async function handler(req, res) {
   const user = await requireTelegramUser(req, res);
@@ -22,12 +23,18 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { messagesLastHour, totalTokens } = await getUsageSummary(user.id);
+  const tier = await getUserTier(user.id);
+  const limits = TIER_LIMITS[tier];
+  const { messagesLastHour, totalTokens, imagesLast30Days } = await getUsageSummary(user.id);
+
   res.status(200).json({
     isOwner: false,
+    tier,
     messagesLastHour,
-    messagesPerHourLimit: DEFAULT_LIMITS.messagesPerHour,
+    messagesPerHourLimit: limits.messagesPerHour,
     totalTokens,
-    maxTokens: DEFAULT_LIMITS.maxTokens,
+    maxTokens: limits.maxTokens,
+    imagesLast30Days,
+    imageGenPerMonth: limits.imageGenPerMonth,
   });
 }

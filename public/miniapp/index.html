@@ -601,6 +601,12 @@
         <div id="memory-list"></div>
         <button type="button" class="menu-item" id="add-memory-btn" style="padding: 10px 0 2px;">+ Add memory</button>
       </div>
+      <div class="settings-section" id="upgrade-section" hidden>
+        <div class="settings-label" style="margin-bottom: 6px;">Plan</div>
+        <div class="settings-hint" id="current-tier-label" style="margin-top: 0; margin-bottom: 10px;"></div>
+        <button type="button" class="menu-item" id="upgrade-pro-btn" style="padding: 9px 0;">⭐ Upgrade to Pro</button>
+        <button type="button" class="menu-item" id="upgrade-premium-btn" style="padding: 9px 0;">⭐ Upgrade to Premium</button>
+      </div>
       <div class="settings-section" id="users-section" hidden>
         <div class="settings-label" style="margin-bottom: 8px;">Pending requests</div>
         <div id="pending-list"></div>
@@ -693,6 +699,10 @@
   const menuUsageEl = document.getElementById("menu-usage");
   const menuUsageMessagesEl = document.getElementById("menu-usage-messages");
   const menuUsageTokensEl = document.getElementById("menu-usage-tokens");
+  const upgradeSectionEl = document.getElementById("upgrade-section");
+  const currentTierLabelEl = document.getElementById("current-tier-label");
+  const upgradeProBtn = document.getElementById("upgrade-pro-btn");
+  const upgradePremiumBtn = document.getElementById("upgrade-premium-btn");
   const usersSectionEl = document.getElementById("users-section");
   const approvedSectionEl = document.getElementById("approved-section");
   const pendingListEl = document.getElementById("pending-list");
@@ -797,6 +807,7 @@
     loadSettings();
     loadMemories();
     loadUsers();
+    loadUsage();
   });
   settingsBackBtn.addEventListener("click", showListView);
 
@@ -943,21 +954,55 @@
     });
   });
 
-  // --- Usage strip (drawer menu) ---
+  // --- Usage strip (drawer menu) + Upgrade section (Settings) ---
   async function loadUsage() {
     try {
       const data = await apiFetch("/api/miniapp/usage");
       if (data.isOwner) {
         menuUsageEl.hidden = true;
+        upgradeSectionEl.hidden = true;
         return;
       }
       menuUsageEl.hidden = false;
       menuUsageMessagesEl.textContent = `${data.messagesLastHour}/${data.messagesPerHourLimit} messages this hour`;
       menuUsageTokensEl.textContent = `${data.totalTokens.toLocaleString()}/${data.maxTokens.toLocaleString()} tokens used`;
+
+      upgradeSectionEl.hidden = false;
+      const tierLabel = data.tier.charAt(0).toUpperCase() + data.tier.slice(1);
+      currentTierLabelEl.textContent =
+        `Current plan: ${tierLabel} · ${data.imagesLast30Days}/${data.imageGenPerMonth} image generations this month`;
+      upgradeProBtn.hidden = data.tier !== "free";
+      upgradePremiumBtn.hidden = data.tier === "premium";
     } catch {
-      menuUsageEl.hidden = true; // fails closed — no usage shown rather than a broken row
+      // Fails closed — no usage or upgrade options shown rather than a broken row.
+      menuUsageEl.hidden = true;
+      upgradeSectionEl.hidden = true;
     }
   }
+
+  async function startUpgrade(tier) {
+    try {
+      const { url } = await apiFetch("/api/miniapp/create-invoice", {
+        method: "POST",
+        body: JSON.stringify({ tier }),
+      });
+      if (tg?.openInvoice) {
+        tg.openInvoice(url, (status) => {
+          // The payment webhook that actually activates the subscription
+          // arrives separately and can take a moment to land — this
+          // refresh is best-effort, not a guarantee it's already reflected.
+          if (status === "paid") setTimeout(loadUsage, 1500);
+        });
+      } else {
+        window.open(url, "_blank");
+      }
+    } catch (err) {
+      const msg = `Couldn't start checkout: ${err.message}`;
+      tg?.showAlert?.(msg) ?? alert(msg);
+    }
+  }
+  upgradeProBtn.addEventListener("click", () => startUpgrade("pro"));
+  upgradePremiumBtn.addEventListener("click", () => startUpgrade("premium"));
 
   // --- Users panel (owner only — the server independently re-checks this
   // on every request; hiding the section here is just cleanliness, not

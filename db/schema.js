@@ -86,17 +86,18 @@ export const accessRequests = pgTable("access_requests", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
-// One row per usage event (a message answered, or a file processed) — a
-// log rather than a running counter, so "messages in the last hour" is a
-// real rolling window (ages out naturally) rather than a fixed clock-hour
-// bucket. Tokens come straight from the AI providers' own usage figures in
-// their responses, not an estimate.
+// One row per usage event (a message answered, a file processed, or an
+// image generated) — a log rather than a running counter, so "messages in
+// the last hour" and "images in the last 30 days" are real rolling
+// windows (ages out naturally) rather than fixed clock-aligned buckets.
+// Tokens come straight from the AI providers' own usage figures in their
+// responses, not an estimate.
 export const usageEvents = pgTable(
   "usage_events",
   {
     id: serial("id").primaryKey(),
     telegramUserId: bigint("telegram_user_id", { mode: "number" }).notNull(),
-    kind: text("kind").notNull(), // "message" | "file"
+    kind: text("kind").notNull(), // "message" | "file" | "image"
     tokens: integer("tokens"),
     bytes: integer("bytes"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -105,3 +106,19 @@ export const usageEvents = pgTable(
     userTimeIdx: index("usage_events_user_time_idx").on(table.telegramUserId, table.createdAt),
   })
 );
+
+// One row per Telegram user who has ever subscribed. A missing row (or a
+// row whose expiresAt has passed) means "free tier" — there's no explicit
+// cancellation flow to handle: Telegram's own subscription UI lets a user
+// cancel any time, and a lapsed/canceled subscription simply stops
+// renewing, so checking expiresAt against now() is enough to self-heal
+// back to free without needing to react to a cancellation event at all.
+export const subscriptions = pgTable("subscriptions", {
+  telegramUserId: bigint("telegram_user_id", { mode: "number" }).primaryKey(),
+  tier: text("tier").notNull(), // "pro" | "premium"
+  status: text("status").notNull(), // "active" | "lapsed"
+  telegramChargeId: text("telegram_charge_id"),
+  expiresAt: timestamp("expires_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});

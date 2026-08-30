@@ -21,7 +21,8 @@
 import { handleUpload } from "@vercel/blob/client";
 import { verifyTelegramInitData } from "../../lib/telegramAuth.js";
 import { isApproved, isOwner } from "../../lib/access.js";
-import { DEFAULT_LIMITS } from "../../lib/limits.js";
+import { getUserTier } from "../../lib/subscriptions.js";
+import { TIER_LIMITS } from "../../lib/limits.js";
 
 const ALLOWED_CONTENT_TYPES = [
   "image/*",
@@ -54,9 +55,11 @@ export default async function handler(req, res) {
         if (!user || !(await isApproved(user.id))) {
           throw new Error("Not authorized");
         }
+        const tier = await getUserTier(user.id);
+        const maxBytes = isOwner(user.id) ? 500 * 1024 * 1024 : TIER_LIMITS[tier].maxFileBytes;
         return {
           allowedContentTypes: ALLOWED_CONTENT_TYPES,
-          maximumSizeInBytes: isOwner(user.id) ? 500 * 1024 * 1024 : DEFAULT_LIMITS.maxFileBytes,
+          maximumSizeInBytes: maxBytes,
           tokenPayload: JSON.stringify({ telegramUserId: user.id }),
         };
       },

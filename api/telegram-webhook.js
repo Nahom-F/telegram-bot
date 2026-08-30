@@ -27,6 +27,8 @@
 //   /start           intro message
 //   /image <prompt>  generates an image via Pollinations.ai (also /img)
 //   /users           (owner only) lists approved users with a Remove button
+//   /upgrade         shows current plan + Pro/Premium options (Telegram Stars,
+//                     billed monthly, auto-renewing)
 //   send a photo     analyzes it — uses your caption as the question if you
 //                     add one, otherwise reads/answers anything written in
 //                     the image or describes it
@@ -54,7 +56,8 @@ import {
   removeUser,
   listApprovedUsers,
 } from "../lib/access.js";
-import { checkMessageLimit, recordMessageUsage } from "../lib/limits.js";
+import { checkMessageLimit, recordMessageUsage, checkImageGenLimit, recordImageUsage } from "../lib/limits.js";
+import { getUserTier, activateSubscription, TIER_PRICES_STARS, SUBSCRIPTION_PERIOD_SECONDS } from "../lib/subscriptions.js";
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -278,7 +281,7 @@ async function sendStartMessage(chatId) {
     text:
       "I'm online — Gemini for chat (Groq backup), /image <description> for pictures, " +
       "send me a photo any time and I'll analyze it, and send me a PDF, .docx, or text " +
-      "file and I'll read it too." +
+      "file and I'll read it too. Send /upgrade any time to see your current plan and raise your limits." +
       (MINI_APP_URL ? " There's also a proper chat app now, with saved history." : "") +
       `\n\n${DEVELOPER_CREDIT}`,
   };
@@ -396,8 +399,86 @@ async function handleCallbackQuery(cq) {
     return;
   }
 
+  if (data.startsWith("upgrade:")) {
+    const tier = data.split(":")[1]; // "pro" | "premium"
+    const price = TIER_PRICES_STARS[tier];
+    if (!price) {
+      await answerCallbackQuery(cq.id, "Unknown plan.");
+      return;
+    }
+    await answerCallbackQuery(cq.id);
+    await sendStarsInvoice(chatId, tier, price);
+    return;
+  }
+
   // Unknown callback_data — still must be acknowledged.
   await answerCallbackQuery(cq.id);
+}
+
+// A Stars invoice with subscription_period set bills every 30 days
+// automatically from Telegram's side — no cron job or scheduled task
+// needed here. The first charge happens the moment they pay; renewals
+// arrive later as their own successful_payment updates, handled below.
+async function sendStarsInvoice(chatId, tier, priceStars) {
+  const label = tier === "premium" ? "Premium" : "Pro";
+  const resp = await fetchWithTimeout(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendInvoice`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      title: `${label} subscription`,
+      description: `${label} tier — higher limits, billed monthly in Telegram Stars. Cancel any time from Telegram's own subscription settings.`,
+      payload: `sub:${tier}`,
+      currency: "XTR",
+      prices: [{ label: `${label} — 1 month`, amount: priceStars }],
+      subscription_period: SUBSCRIPTION_PERIOD_SECONDS,
+    }),
+  }, 10000);
+  if (!resp.ok) {
+    console.error(`sendInvoice failed (${resp.status}):`, await resp.text());
+    await sendTelegramMessage(chatId, "⚠️ Couldn't create that invoice right now — try again in a moment.");
+  }
+}
+
+async function answerPreCheckoutQuery(preCheckoutQueryId, ok, errorMessage) {
+  const body = { pre_checkout_query_id: preCheckoutQueryId, ok };
+  if (!ok && errorMessage) body.error_message = errorMessage;
+  const resp = await fetchWithTimeout(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerPreCheckoutQuery`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }, 8000);
+  if (!resp.ok) {
+    console.error(`answerPreCheckoutQuery failed (${resp.status}):`, await resp.text());
+  }
+}
+
+// Fires for both a brand-new subscription and every automatic 30-day
+// renewal — Telegram sends its own successful_payment update for each, so
+// there's no cron job here re-charging anyone; this just records whatever
+// Telegram already collected.
+async function handleSuccessfulPayment(chatId, payment) {
+  const tier = (payment.invoice_payload || "").split(":")[1]; // "sub:pro" -> "pro"
+  if (tier !== "pro" && tier !== "premium") {
+    console.error("successful_payment with unrecognized payload:", payment.invoice_payload);
+    return;
+  }
+
+  // Telegram's date fields are Unix seconds, not milliseconds.
+  const expiresAt = payment.subscription_expiration_date
+    ? new Date(payment.subscription_expiration_date * 1000)
+    : new Date(Date.now() + SUBSCRIPTION_PERIOD_SECONDS * 1000);
+
+  await activateSubscription(chatId, tier, payment.telegram_payment_charge_id, expiresAt);
+
+  const label = tier === "premium" ? "Premium" : "Pro";
+  const isRenewal = payment.is_recurring && !payment.is_first_recurring;
+  await sendTelegramMessage(
+    chatId,
+    isRenewal
+      ? `✅ Your ${label} subscription renewed — thanks for sticking around!`
+      : `🎉 You're now on ${label}! Higher limits are active immediately.`
+  );
 }
 
 async function sendTelegramPhoto(chatId, imageBuffer, mimeType, caption) {
@@ -438,10 +519,31 @@ export default async function handler(req, res) {
     return;
   }
 
+  // Telegram requires answering this within 10 seconds or the charge never
+  // goes through. For Stars there's nothing further to validate beyond
+  // what we already put in the invoice, so this always approves.
+  if (update?.pre_checkout_query) {
+    await answerPreCheckoutQuery(update.pre_checkout_query.id, true);
+    res.status(200).send("OK");
+    return;
+  }
+
   const message = update?.message;
   const chatId = message?.chat?.id;
 
   if (!chatId) {
+    res.status(200).send("OK");
+    return;
+  }
+
+  // A completed charge — the first payment or one of the automatic 30-day
+  // renewals Telegram sends on its own. Handled before the access gate
+  // below since a successful payment should never be blocked by access
+  // status (by the time someone can pay, they were already approved
+  // enough to see /upgrade in the first place, but this stays robust
+  // either way).
+  if (message.successful_payment) {
+    await handleSuccessfulPayment(chatId, message.successful_payment);
     res.status(200).send("OK");
     return;
   }
@@ -518,6 +620,25 @@ export default async function handler(req, res) {
         { text: `🗑️ Remove ${u.displayName || u.telegramUserId}`, callback_data: `remove:${u.telegramUserId}` },
       ]);
       await sendTelegramMessageWithKeyboard(chatId, `Approved users (${users.length}):`, keyboard);
+    }
+    res.status(200).send("OK");
+    return;
+  }
+
+  if (text === "/upgrade") {
+    const currentTier = await getUserTier(chatId);
+    if (currentTier === "owner") {
+      await sendTelegramMessage(chatId, "You're the owner — no limits to raise.");
+    } else {
+      const tierLine = currentTier === "free" ? "You're currently on the Free tier." : `You're currently on ${currentTier[0].toUpperCase()}${currentTier.slice(1)}.`;
+      await sendTelegramMessageWithKeyboard(
+        chatId,
+        `${tierLine} Pick a plan — billed monthly in Telegram Stars, starting today, renewing automatically every 30 days:`,
+        [
+          [{ text: `⭐ Pro — ${TIER_PRICES_STARS.pro} Stars/month`, callback_data: "upgrade:pro" }],
+          [{ text: `⭐ Premium — ${TIER_PRICES_STARS.premium} Stars/month`, callback_data: "upgrade:premium" }],
+        ]
+      );
     }
     res.status(200).send("OK");
     return;
@@ -645,10 +766,17 @@ export default async function handler(req, res) {
 
   const imageMatch = text.match(/^\/(image|img)\s+([\s\S]+)/i);
   if (imageMatch) {
+    const imageLimitCheck = await checkImageGenLimit(chatId);
+    if (!imageLimitCheck.allowed) {
+      await sendTelegramMessage(chatId, imageLimitCheck.reason);
+      res.status(200).send("OK");
+      return;
+    }
     const imagePrompt = imageMatch[2].trim();
     try {
       const { buffer, mimeType } = await askPollinationsImage(imagePrompt);
       await sendTelegramPhoto(chatId, buffer, mimeType, imagePrompt);
+      await recordImageUsage(chatId);
     } catch (err) {
       console.error("Image generation failed:", err.message);
       await sendTelegramMessage(chatId, `⚠️ Couldn't generate that image: ${err.message}`);

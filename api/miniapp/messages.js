@@ -28,7 +28,7 @@ import { getConversationReply } from "../../lib/ai.js";
 import { analyzeAttachment } from "../../lib/attachments.js";
 import { generateImage } from "../../lib/imagegen.js";
 import { isMemoryEnabled, listMemories, saveMemory, extractMemoryMarker, MEMORY_LIMIT } from "../../lib/memory.js";
-import { checkMessageLimit, recordMessageUsage, recordFileUsage } from "../../lib/limits.js";
+import { checkMessageLimit, recordMessageUsage, recordFileUsage, checkImageGenLimit, recordImageUsage } from "../../lib/limits.js";
 
 async function loadOwnedChat(chatId, telegramUserId) {
   const [chat] = await db
@@ -93,6 +93,14 @@ export default async function handler(req, res) {
       return;
     }
 
+    if (imageMatch) {
+      const imageLimitCheck = await checkImageGenLimit(user.id);
+      if (!imageLimitCheck.allowed) {
+        res.status(429).json({ error: "rate_limited", message: imageLimitCheck.reason });
+        return;
+      }
+    }
+
     const displayContent = trimmedContent || (hasAttachment ? `📎 ${attachmentName}` : "");
 
     await db.insert(messages).values({
@@ -125,6 +133,7 @@ export default async function handler(req, res) {
         assistantContent = `⚠️ Couldn't generate that image: ${err.message}`;
       }
       await recordMessageUsage(user.id, null); // still counts toward messages/hour, no tokens involved
+      await recordImageUsage(user.id);
 
       const [assistantMessage] = await db
         .insert(messages)

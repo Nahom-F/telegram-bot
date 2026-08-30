@@ -58,3 +58,13 @@ CREATE TABLE IF NOT EXISTS usage_events (
   created_at TIMESTAMP NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS usage_events_user_time_idx ON usage_events(telegram_user_id, created_at);
+
+CREATE TABLE IF NOT EXISTS subscriptions (
+  telegram_user_id BIGINT PRIMARY KEY,
+  tier TEXT NOT NULL,
+  status TEXT NOT NULL,
+  telegram_charge_id TEXT,
+  expires_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT now(),
+  updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
