@@ -122,3 +122,12 @@ export const subscriptions = pgTable("subscriptions", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+// Editable Stars prices, so /setprice can change them without a redeploy.
+// Missing rows fall back to the hardcoded defaults in lib/subscriptions.js
+// — the table only needs a row once someone actually changes a price.
+export const planPrices = pgTable("plan_prices", {
+  tier: text("tier").primaryKey(), // "pro" | "premium"
+  priceStars: integer("price_stars").notNull(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});

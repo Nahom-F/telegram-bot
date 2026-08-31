@@ -213,12 +213,17 @@ one access list, not two that could drift out of sync.
 Three tiers, checked against real usage (see `lib/limits.js`) — you, as
 owner, are exempt from all of it:
 
-| | Free | Pro (250 ⭐/mo) | Premium (500 ⭐/mo) |
+| | Free | Pro (300 ⭐/mo) | Premium (600 ⭐/mo) |
 |---|---|---|---|
 | Messages/hour | 20 | 100 | ~1000 (effectively unlimited) |
 | Token allowance | 100,000 lifetime | 1,000,000 lifetime | 10,000,000 lifetime |
 | File size cap | 50MB | 200MB | 500MB |
 | Image generations | 3 / 30 days | 10 / 30 days | ~1000 / 30 days |
+| Video generation | 🚧 under production — see note below | | |
+
+`/plans` (any user) or the "Compare plans" button in the mini app's
+Settings shows this same table live, pulled directly from `TIER_LIMITS` so
+it can't drift out of sync with what's actually enforced.
 
 **How payment works:** `/upgrade` in the DM, or the Upgrade section in the
 mini app's Settings — both create a real Telegram Stars **subscription**
@@ -231,8 +236,21 @@ subscription management UI; when they do, the subscription simply stops
 renewing and their access quietly reverts to Free once the current period
 ends — nothing here needs to react to a cancellation event specifically.
 
-Prices are Stars amounts in `lib/subscriptions.js` (`TIER_PRICES_STARS`) —
-change the numbers there to reprice; no other file needs touching.
+**Changing prices without a redeploy:** prices live in Neon (`plan_prices`
+table), not hardcoded — as owner, send `/setprice pro 300` or
+`/setprice premium 600` in the DM and it takes effect immediately, no
+redeploy needed. `lib/subscriptions.js`'s `FALLBACK_PRICES_STARS` is only
+used until the first time a price is ever set for that tier.
+
+**Video generation** isn't wired to anything yet — deliberately. Unlike
+image generation (genuinely free via Pollinations, no matter the volume),
+there's no free equivalent for video: every real provider (Kling,
+PixVerse, Google's Veo, etc.) charges per-video or per-month, and OpenAI's
+Sora API is being shut down entirely. Offering it on the Free tier would
+mean you personally eating a real, ongoing cost per user. It's listed in
+the comparison table as "under production" as a placeholder — building it
+for real is a separate decision once there's actual subscriber demand to
+justify a provider account and a price that covers it.
 
 **On "premium" and the AI model:** Premium currently gets the same
 Groq/Gemini Flash models as everyone else — just higher numeric limits.

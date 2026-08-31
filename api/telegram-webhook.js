@@ -56,8 +56,8 @@ import {
   removeUser,
   listApprovedUsers,
 } from "../lib/access.js";
-import { checkMessageLimit, recordMessageUsage, checkImageGenLimit, recordImageUsage } from "../lib/limits.js";
-import { getUserTier, activateSubscription, TIER_PRICES_STARS, SUBSCRIPTION_PERIOD_SECONDS } from "../lib/subscriptions.js";
+import { checkMessageLimit, recordMessageUsage, checkImageGenLimit, recordImageUsage, TIER_LIMITS } from "../lib/limits.js";
+import { getUserTier, activateSubscription, getTierPrices, setTierPrice, MAX_PRICE_STARS, SUBSCRIPTION_PERIOD_SECONDS } from "../lib/subscriptions.js";
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -260,12 +260,14 @@ function splitForTelegram(text, limit = TELEGRAM_MESSAGE_LIMIT) {
   return chunks;
 }
 
-async function sendTelegramMessage(chatId, text) {
+async function sendTelegramMessage(chatId, text, options = {}) {
   for (const chunk of splitForTelegram(text)) {
+    const body = { chat_id: chatId, text: chunk };
+    if (options.parseMode) body.parse_mode = options.parseMode;
     const resp = await fetchWithTimeout(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text: chunk }),
+      body: JSON.stringify(body),
     }, 10000);
     if (!resp.ok) {
       console.error(`sendMessage failed (${resp.status}):`, await resp.text());
@@ -401,7 +403,8 @@ async function handleCallbackQuery(cq) {
 
   if (data.startsWith("upgrade:")) {
     const tier = data.split(":")[1]; // "pro" | "premium"
-    const price = TIER_PRICES_STARS[tier];
+    const prices = await getTierPrices();
+    const price = prices[tier];
     if (!price) {
       await answerCallbackQuery(cq.id, "Unknown plan.");
       return;
@@ -411,8 +414,39 @@ async function handleCallbackQuery(cq) {
     return;
   }
 
+  if (data === "compare_plans") {
+    await answerCallbackQuery(cq.id);
+    await sendTelegramMessage(chatId, await buildPlanComparisonText(), { parseMode: "HTML" });
+    return;
+  }
+
   // Unknown callback_data — still must be acknowledged.
   await answerCallbackQuery(cq.id);
+}
+
+// A simple monospace comparison table via HTML's <pre> — Telegram renders
+// this with real column alignment, unlike plain text. Pulled from
+// TIER_LIMITS directly so it can never drift out of sync with the actual
+// enforced limits. Video generation is listed as a row but isn't wired to
+// anything yet; see the README.
+async function buildPlanComparisonText() {
+  const prices = await getTierPrices();
+  const { free, pro, premium } = TIER_LIMITS;
+  const fmtMB = (bytes) => `${Math.floor(bytes / (1024 * 1024))}MB`;
+  const fmtTokens = (n) => (n >= 1000000 ? `${n / 1000000}M` : `${n / 1000}K`);
+  const row = (label, freeVal, proVal, premiumVal) =>
+    `${label.padEnd(10)}${String(freeVal).padEnd(12)}${String(proVal).padEnd(12)}${premiumVal}`;
+
+  const lines = [
+    row("Plan", "Free", "Pro", "Premium"),
+    row("Price", "$0", `${prices.pro} ⭐`, `${prices.premium} ⭐`),
+    row("Msgs/hr", free.messagesPerHour, pro.messagesPerHour, `~${premium.messagesPerHour}`),
+    row("Tokens", fmtTokens(free.maxTokens), fmtTokens(pro.maxTokens), fmtTokens(premium.maxTokens)),
+    row("Files", fmtMB(free.maxFileBytes), fmtMB(pro.maxFileBytes), fmtMB(premium.maxFileBytes)),
+    row("Images/mo", free.imageGenPerMonth, pro.imageGenPerMonth, `~${premium.imageGenPerMonth}`),
+  ];
+
+  return `<pre>${lines.join("\n")}</pre>\n\n🎬 Video generation — 🚧 under production, coming to paid plans once there are real subscribers.`;
 }
 
 // A Stars invoice with subscription_period set bills every 30 days
@@ -630,16 +664,43 @@ export default async function handler(req, res) {
     if (currentTier === "owner") {
       await sendTelegramMessage(chatId, "You're the owner — no limits to raise.");
     } else {
+      const prices = await getTierPrices();
       const tierLine = currentTier === "free" ? "You're currently on the Free tier." : `You're currently on ${currentTier[0].toUpperCase()}${currentTier.slice(1)}.`;
       await sendTelegramMessageWithKeyboard(
         chatId,
         `${tierLine} Pick a plan — billed monthly in Telegram Stars, starting today, renewing automatically every 30 days:`,
         [
-          [{ text: `⭐ Pro — ${TIER_PRICES_STARS.pro} Stars/month`, callback_data: "upgrade:pro" }],
-          [{ text: `⭐ Premium — ${TIER_PRICES_STARS.premium} Stars/month`, callback_data: "upgrade:premium" }],
+          [{ text: `⭐ Pro — ${prices.pro} Stars/month`, callback_data: "upgrade:pro" }],
+          [{ text: `⭐ Premium — ${prices.premium} Stars/month`, callback_data: "upgrade:premium" }],
+          [{ text: "📊 Compare plans", callback_data: "compare_plans" }],
         ]
       );
     }
+    res.status(200).send("OK");
+    return;
+  }
+
+  if (text === "/plans") {
+    await sendTelegramMessage(chatId, await buildPlanComparisonText(), { parseMode: "HTML" });
+    res.status(200).send("OK");
+    return;
+  }
+
+  const setPriceMatch = isOwner(chatId) && text?.match(/^\/setprice\s+(pro|premium)\s+(\d+)/i);
+  if (setPriceMatch) {
+    const tier = setPriceMatch[1].toLowerCase();
+    const amount = Number(setPriceMatch[2]);
+    if (amount < 1 || amount > MAX_PRICE_STARS) {
+      await sendTelegramMessage(chatId, `Price has to be between 1 and ${MAX_PRICE_STARS} Stars — that's Telegram's own limit, not ours.`);
+    } else {
+      await setTierPrice(tier, amount);
+      await sendTelegramMessage(chatId, `Done — ${tier} is now ${amount} Stars/month. Takes effect immediately, no redeploy needed.`);
+    }
+    res.status(200).send("OK");
+    return;
+  }
+  if (isOwner(chatId) && /^\/setprice\b/i.test(text || "")) {
+    await sendTelegramMessage(chatId, "Send it like: /setprice pro 300");
     res.status(200).send("OK");
     return;
   }

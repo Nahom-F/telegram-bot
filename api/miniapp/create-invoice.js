@@ -10,7 +10,7 @@
 
 import { requireTelegramUser } from "../../lib/telegramAuth.js";
 import { fetchWithTimeout } from "../../lib/fetchWithTimeout.js";
-import { TIER_PRICES_STARS, SUBSCRIPTION_PERIOD_SECONDS } from "../../lib/subscriptions.js";
+import { getTierPrices, SUBSCRIPTION_PERIOD_SECONDS } from "../../lib/subscriptions.js";
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -24,7 +24,8 @@ export default async function handler(req, res) {
   }
 
   const { tier } = req.body || {};
-  const price = TIER_PRICES_STARS[tier];
+  const prices = await getTierPrices();
+  const price = prices[tier];
   if (!price) {
     res.status(400).json({ error: "Unknown plan" });
     return;

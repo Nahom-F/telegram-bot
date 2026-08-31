@@ -68,3 +68,12 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   created_at TIMESTAMP NOT NULL DEFAULT now(),
   updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS plan_prices (
+  tier TEXT PRIMARY KEY,
+  price_stars INTEGER NOT NULL,
+  updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+INSERT INTO plan_prices (tier, price_stars) VALUES ('pro', 300), ('premium', 600)
+ON CONFLICT (tier) DO NOTHING;

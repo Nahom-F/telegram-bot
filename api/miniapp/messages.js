@@ -6,9 +6,14 @@
 //        attachment if one was uploaded first — see blob-upload.js),
 //        gets an AI reply, saves and returns it
 //
-// content starting with "/image <description>" (no attachment) generates
-// an image via Pollinations instead of an AI text reply — same command as
-// the DM bot's /image, kept consistent across both surfaces.
+// Two ways to trigger image generation instead of a normal AI reply:
+//   - content starting with "/image <description>" (no attachment) — same
+//     command as the DM bot's /image, kept consistent across surfaces.
+//   - plain natural language ("generate an image of a cat wearing a hat")
+//     — the model itself detects this via a [GENERATE_IMAGE: ...] marker
+//     (see buildSystemInstruction in lib/ai.js) that gets stripped out and
+//     acted on here, the same technique the memory feature already uses
+//     for its [SAVE_MEMORY: ...] marker.
 //
 // An attachment is analyzed on its own (image/PDF via vision, .docx/.txt
 // via text extraction) plus whatever caption came with it — not folded
@@ -26,7 +31,7 @@ import { chats, messages } from "../../db/schema.js";
 import { requireTelegramUser } from "../../lib/telegramAuth.js";
 import { getConversationReply } from "../../lib/ai.js";
 import { analyzeAttachment } from "../../lib/attachments.js";
-import { generateImage } from "../../lib/imagegen.js";
+import { generateImage, extractImageGenMarker } from "../../lib/imagegen.js";
 import { isMemoryEnabled, listMemories, saveMemory, extractMemoryMarker, MEMORY_LIMIT } from "../../lib/memory.js";
 import { checkMessageLimit, recordMessageUsage, recordFileUsage, checkImageGenLimit, recordImageUsage } from "../../lib/limits.js";
 
@@ -36,6 +41,57 @@ async function loadOwnedChat(chatId, telegramUserId) {
     .from(chats)
     .where(and(eq(chats.id, chatId), eq(chats.telegramUserId, telegramUserId)));
   return chat || null;
+}
+
+// Shared by both the explicit "/image" path and the natural-language
+// marker path below. Generates via Pollinations, re-uploads to our own
+// Blob store (not left pointing at Pollinations' URL) so it stays
+// reliably viewable in this chat's history later, and saves the result as
+// the assistant's message. Responds on res itself and returns nothing —
+// callers just call it and return.
+async function generateAndSaveImage(res, chat, userId, prompt) {
+  const imageLimitCheck = await checkImageGenLimit(userId);
+  if (!imageLimitCheck.allowed) {
+    res.status(429).json({ error: "rate_limited", message: imageLimitCheck.reason });
+    return;
+  }
+
+  let assistantContent;
+  let attachment = null;
+  try {
+    const { buffer, mimeType } = await generateImage(prompt);
+    const blob = await put(`generated-images/${chat.id}-${Date.now()}.jpg`, buffer, {
+      access: "public",
+      contentType: mimeType,
+    });
+    assistantContent = `Generated: ${prompt}`;
+    attachment = { url: blob.url, name: `${prompt.slice(0, 40)}.jpg`, type: mimeType };
+  } catch (err) {
+    assistantContent = `⚠️ Couldn't generate that image: ${err.message}`;
+  }
+
+  await recordMessageUsage(userId, null); // still counts toward messages/hour, no tokens involved
+  if (attachment) await recordImageUsage(userId); // don't penalize the monthly cap for a failed attempt
+
+  const [assistantMessage] = await db
+    .insert(messages)
+    .values({
+      chatId: chat.id,
+      role: "assistant",
+      content: assistantContent,
+      attachmentUrl: attachment?.url || null,
+      attachmentName: attachment?.name || null,
+      attachmentType: attachment?.type || null,
+    })
+    .returning();
+
+  await db.update(chats).set({ updatedAt: new Date() }).where(eq(chats.id, chat.id));
+  if (chat.title === "New chat") {
+    const autoTitle = prompt.length > 40 ? `${prompt.slice(0, 40)}…` : prompt;
+    await db.update(chats).set({ title: autoTitle }).where(eq(chats.id, chat.id));
+  }
+
+  res.status(201).json(assistantMessage);
 }
 
 export default async function handler(req, res) {
@@ -93,14 +149,6 @@ export default async function handler(req, res) {
       return;
     }
 
-    if (imageMatch) {
-      const imageLimitCheck = await checkImageGenLimit(user.id);
-      if (!imageLimitCheck.allowed) {
-        res.status(429).json({ error: "rate_limited", message: imageLimitCheck.reason });
-        return;
-      }
-    }
-
     const displayContent = trimmedContent || (hasAttachment ? `📎 ${attachmentName}` : "");
 
     await db.insert(messages).values({
@@ -115,45 +163,9 @@ export default async function handler(req, res) {
     // --- Image generation ("/image <description>") ---
     // A completely separate path from the AI text/vision reply below —
     // Pollinations returns image bytes directly, not something that goes
-    // through Gemini/Groq at all. The result gets uploaded to our own
-    // Blob store (not left pointing at Pollinations' URL) so it stays
-    // reliably viewable as part of this chat's history later.
+    // through Gemini/Groq at all.
     if (imageMatch) {
-      const prompt = imageMatch[2].trim();
-      let assistantContent, attachment = null;
-      try {
-        const { buffer, mimeType } = await generateImage(prompt);
-        const blob = await put(`generated-images/${chat.id}-${Date.now()}.jpg`, buffer, {
-          access: "public",
-          contentType: mimeType,
-        });
-        assistantContent = `Generated: ${prompt}`;
-        attachment = { url: blob.url, name: `${prompt.slice(0, 40)}.jpg`, type: mimeType };
-      } catch (err) {
-        assistantContent = `⚠️ Couldn't generate that image: ${err.message}`;
-      }
-      await recordMessageUsage(user.id, null); // still counts toward messages/hour, no tokens involved
-      await recordImageUsage(user.id);
-
-      const [assistantMessage] = await db
-        .insert(messages)
-        .values({
-          chatId: chat.id,
-          role: "assistant",
-          content: assistantContent,
-          attachmentUrl: attachment?.url || null,
-          attachmentName: attachment?.name || null,
-          attachmentType: attachment?.type || null,
-        })
-        .returning();
-
-      await db.update(chats).set({ updatedAt: new Date() }).where(eq(chats.id, chat.id));
-      if (chat.title === "New chat") {
-        const autoTitle = prompt.length > 40 ? `${prompt.slice(0, 40)}…` : prompt;
-        await db.update(chats).set({ title: autoTitle }).where(eq(chats.id, chat.id));
-      }
-
-      res.status(201).json(assistantMessage);
+      await generateAndSaveImage(res, chat, user.id, imageMatch[2].trim());
       return;
     }
 
@@ -182,6 +194,20 @@ export default async function handler(req, res) {
       tokensUsed = result.tokensUsed;
     }
     await recordMessageUsage(user.id, tokensUsed);
+
+    // Natural-language image request, detected by the model itself rather
+    // than a literal /image command — e.g. "generate an image of a cat
+    // wearing a hat". The AI call above already ran (its reply is just the
+    // marker, discarded here) — a real trade-off of this approach: one
+    // extra round of tokens gets spent versus the explicit /image path,
+    // in exchange for not requiring the command at all.
+    if (!hasAttachment) {
+      const naturalImagePrompt = extractImageGenMarker(rawReply);
+      if (naturalImagePrompt) {
+        await generateAndSaveImage(res, chat, user.id, naturalImagePrompt);
+        return;
+      }
+    }
 
     // If the model flagged that the user asked it to remember something,
     // save it and strip the marker out before anyone sees it. If memory's

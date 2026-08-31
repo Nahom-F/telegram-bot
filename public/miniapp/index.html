@@ -289,6 +289,12 @@
     line-height: 1.35;
     white-space: pre-wrap;
     word-wrap: break-word;
+    /* Telegram's WebView disables text selection by default (to avoid
+       conflicting with its own swipe/gesture handling) — explicitly
+       re-enable it here so message text can actually be selected/copied. */
+    user-select: text;
+    -webkit-user-select: text;
+    -webkit-touch-callout: default;
   }
   .bubble.user {
     align-self: flex-end;
@@ -522,6 +528,25 @@
   .memory-save-btn { background: var(--button); color: var(--button-text); }
   .memory-cancel-btn { background: var(--secondary-bg); color: var(--text); }
   .memory-empty { color: var(--hint); font-size: 13.5px; padding: 6px 0; }
+
+  .plan-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+    font-size: 12.5px;
+  }
+  .plan-table th, .plan-table td {
+    padding: 6px 4px;
+    text-align: left;
+    border-bottom: 1px solid var(--section-separator);
+  }
+  .plan-table th { color: var(--hint); font-weight: 500; }
+  .plan-table-note {
+    font-size: 12px;
+    color: var(--hint);
+    margin-top: 8px;
+    line-height: 1.4;
+  }
 </style>
 </head>
 <body>
@@ -606,6 +631,8 @@
         <div class="settings-hint" id="current-tier-label" style="margin-top: 0; margin-bottom: 10px;"></div>
         <button type="button" class="menu-item" id="upgrade-pro-btn" style="padding: 9px 0;">⭐ Upgrade to Pro</button>
         <button type="button" class="menu-item" id="upgrade-premium-btn" style="padding: 9px 0;">⭐ Upgrade to Premium</button>
+        <button type="button" class="menu-item" id="plan-details-btn" style="padding: 9px 0;">📊 Compare plans</button>
+        <div id="plan-details-table" hidden></div>
       </div>
       <div class="settings-section" id="users-section" hidden>
         <div class="settings-label" style="margin-bottom: 8px;">Pending requests</div>
@@ -703,6 +730,8 @@
   const currentTierLabelEl = document.getElementById("current-tier-label");
   const upgradeProBtn = document.getElementById("upgrade-pro-btn");
   const upgradePremiumBtn = document.getElementById("upgrade-premium-btn");
+  const planDetailsBtn = document.getElementById("plan-details-btn");
+  const planDetailsTableEl = document.getElementById("plan-details-table");
   const usersSectionEl = document.getElementById("users-section");
   const approvedSectionEl = document.getElementById("approved-section");
   const pendingListEl = document.getElementById("pending-list");
@@ -973,12 +1002,46 @@
         `Current plan: ${tierLabel} · ${data.imagesLast30Days}/${data.imageGenPerMonth} image generations this month`;
       upgradeProBtn.hidden = data.tier !== "free";
       upgradePremiumBtn.hidden = data.tier === "premium";
+
+      try {
+        const plans = await apiFetch("/api/miniapp/plans");
+        upgradeProBtn.textContent = `⭐ Upgrade to Pro — ${plans.prices.pro} Stars/month`;
+        upgradePremiumBtn.textContent = `⭐ Upgrade to Premium — ${plans.prices.premium} Stars/month`;
+      } catch {
+        // Buttons still work without a live price shown — not worth failing the whole section over.
+      }
     } catch {
       // Fails closed — no usage or upgrade options shown rather than a broken row.
       menuUsageEl.hidden = true;
       upgradeSectionEl.hidden = true;
     }
   }
+
+  planDetailsBtn.addEventListener("click", async () => {
+    if (!planDetailsTableEl.hidden) {
+      planDetailsTableEl.hidden = true;
+      return;
+    }
+    try {
+      const plans = await apiFetch("/api/miniapp/plans");
+      const { free, pro, premium } = plans.limits;
+      const mb = (bytes) => `${Math.floor(bytes / (1024 * 1024))}MB`;
+      const tok = (n) => (n >= 1000000 ? `${n / 1000000}M` : `${n / 1000}K`);
+      planDetailsTableEl.innerHTML = `
+        <table class="plan-table">
+          <tr><th></th><th>Free</th><th>Pro</th><th>Premium</th></tr>
+          <tr><td>Price</td><td>$0</td><td>${plans.prices.pro} ⭐</td><td>${plans.prices.premium} ⭐</td></tr>
+          <tr><td>Msgs/hr</td><td>${free.messagesPerHour}</td><td>${pro.messagesPerHour}</td><td>~${premium.messagesPerHour}</td></tr>
+          <tr><td>Tokens</td><td>${tok(free.maxTokens)}</td><td>${tok(pro.maxTokens)}</td><td>${tok(premium.maxTokens)}</td></tr>
+          <tr><td>Files</td><td>${mb(free.maxFileBytes)}</td><td>${mb(pro.maxFileBytes)}</td><td>${mb(premium.maxFileBytes)}</td></tr>
+          <tr><td>Images/mo</td><td>${free.imageGenPerMonth}</td><td>${pro.imageGenPerMonth}</td><td>~${premium.imageGenPerMonth}</td></tr>
+        </table>
+        <div class="plan-table-note">🎬 Video generation — 🚧 under production, coming to paid plans once there are real subscribers.</div>`;
+      planDetailsTableEl.hidden = false;
+    } catch (err) {
+      tg?.showAlert?.(`Couldn't load plan details: ${err.message}`) ?? alert(`Couldn't load plan details: ${err.message}`);
+    }
+  });
 
   async function startUpgrade(tier) {
     try {
@@ -1300,6 +1363,7 @@
       sendBtn.disabled = false;
       attachBtn.disabled = false;
       scrollMessagesToBottom();
+      inputEl.focus({ preventScroll: true });
     }
   });
 
