@@ -299,11 +299,13 @@
     white-space: pre-wrap;
     word-wrap: break-word;
     /* Telegram's WebView disables text selection by default (to avoid
-       conflicting with its own swipe/gesture handling) — explicitly
-       re-enable it here so message text can actually be selected/copied. */
-    user-select: text;
-    -webkit-user-select: text;
-    -webkit-touch-callout: default;
+       conflicting with its own swipe/gesture handling), and its own
+       styles apparently still won even after the first attempt at this —
+       same story as the [hidden] fix above: an !important is what it
+       actually takes to guarantee ours wins here. */
+    user-select: text !important;
+    -webkit-user-select: text !important;
+    -webkit-touch-callout: default !important;
   }
   .bubble.user {
     align-self: flex-end;
@@ -401,6 +403,7 @@
     font-family: inherit;
     background: var(--secondary-bg);
     color: var(--text);
+    caret-color: var(--text);
     outline: none;
   }
   .send-btn {
@@ -502,10 +505,14 @@
     background: none;
     border: none;
     color: var(--hint);
-    font-size: 15px;
-    padding: 4px 6px;
+    font-size: 18px;
+    min-width: 40px;
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     cursor: pointer;
-    border-radius: 6px;
+    border-radius: 8px;
   }
   .memory-icon-btn:active { background: var(--secondary-bg); }
   .memory-edit-area {
@@ -555,6 +562,36 @@
     color: var(--hint);
     margin-top: 8px;
     line-height: 1.4;
+  }
+
+  .price-edit-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+  }
+  .price-edit-row span { flex-shrink: 0; width: 60px; font-size: 14px; }
+  .price-edit-row input {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid var(--section-separator);
+    border-radius: 8px;
+    padding: 7px 10px;
+    font-size: 14px;
+    font-family: inherit;
+    background: var(--bg);
+    color: var(--text);
+    caret-color: var(--text);
+  }
+  .price-edit-row button {
+    flex-shrink: 0;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 13px;
+    background: var(--button);
+    color: var(--button-text);
+    cursor: pointer;
   }
 </style>
 </head>
@@ -651,6 +688,19 @@
         <div class="settings-label" style="margin-bottom: 8px;">Approved users</div>
         <div id="approved-list"></div>
       </div>
+      <div class="settings-section" id="edit-prices-section" hidden>
+        <div class="settings-label" style="margin-bottom: 8px;">Edit prices (⭐/month)</div>
+        <div class="price-edit-row">
+          <span>Pro</span>
+          <input type="number" id="pro-price-input" min="1" max="2500" inputmode="numeric" />
+          <button type="button" id="save-pro-price-btn">Save</button>
+        </div>
+        <div class="price-edit-row">
+          <span>Premium</span>
+          <input type="number" id="premium-price-input" min="1" max="2500" inputmode="numeric" />
+          <button type="button" id="save-premium-price-btn">Save</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -745,6 +795,11 @@
   const approvedSectionEl = document.getElementById("approved-section");
   const pendingListEl = document.getElementById("pending-list");
   const approvedListEl = document.getElementById("approved-list");
+  const editPricesSectionEl = document.getElementById("edit-prices-section");
+  const proPriceInput = document.getElementById("pro-price-input");
+  const premiumPriceInput = document.getElementById("premium-price-input");
+  const saveProPriceBtn = document.getElementById("save-pro-price-btn");
+  const savePremiumPriceBtn = document.getElementById("save-premium-price-btn");
 
   document.title = BOT_NAME;
   document.getElementById("splash-name").textContent = BOT_NAME;
@@ -1086,11 +1141,42 @@
       approvedSectionEl.hidden = false;
       renderPendingList(data.pending);
       renderApprovedList(data.approved);
+
+      // /api/miniapp/users is owner-gated, so a successful fetch here is
+      // also our signal to show the price editor — /api/miniapp/plans'
+      // GET is intentionally open to everyone (it backs the public
+      // Compare Plans table), so it can't be used for that check on its
+      // own the way /users can.
+      editPricesSectionEl.hidden = false;
+      const plans = await apiFetch("/api/miniapp/plans");
+      proPriceInput.value = plans.prices.pro;
+      premiumPriceInput.value = plans.prices.premium;
     } catch {
       usersSectionEl.hidden = true;
       approvedSectionEl.hidden = true;
+      editPricesSectionEl.hidden = true;
     }
   }
+
+  async function savePrice(tier, input) {
+    const amount = Number(input.value);
+    if (!Number.isInteger(amount) || amount < 1 || amount > 2500) {
+      const msg = "Price has to be a whole number between 1 and 2500 Stars.";
+      tg?.showAlert?.(msg) ?? alert(msg);
+      return;
+    }
+    try {
+      await apiFetch("/api/miniapp/plans", {
+        method: "POST",
+        body: JSON.stringify({ tier, priceStars: amount }),
+      });
+      tg?.HapticFeedback?.notificationOccurred?.("success");
+    } catch (err) {
+      tg?.showAlert?.(`Couldn't save: ${err.message}`) ?? alert(`Couldn't save: ${err.message}`);
+    }
+  }
+  saveProPriceBtn.addEventListener("click", () => savePrice("pro", proPriceInput));
+  savePremiumPriceBtn.addEventListener("click", () => savePrice("premium", premiumPriceInput));
 
   function renderPendingList(list) {
     pendingListEl.innerHTML = "";
@@ -1322,6 +1408,7 @@
     inputEl.style.height = "auto";
     sendBtn.disabled = true;
     attachBtn.disabled = true;
+    inputEl.focus({ preventScroll: true }); // re-assert focus immediately, same tick as the tap/Enter that triggered this
 
     renderBubble("user", text, file ? { name: file.name, type: file.type } : null);
     const typingEl = renderTypingBubble();
@@ -1371,8 +1458,8 @@
     } finally {
       sendBtn.disabled = false;
       attachBtn.disabled = false;
-      scrollMessagesToBottom();
       inputEl.focus({ preventScroll: true });
+      requestAnimationFrame(scrollMessagesToBottom);
     }
   });
 
