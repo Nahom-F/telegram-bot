@@ -22,6 +22,15 @@
     --tg-content-safe-top: 0px; /* set from JS via contentSafeAreaInset */
   }
 
+  /* Several component classes below set their own `display` (flex, for a
+     row layout) directly on elements that also get toggled via the plain
+     `hidden` attribute in JS. An author rule's `display` silently beats
+     the browser's own default `[hidden] { display: none }` — this
+     `!important` is the deliberate, standard fix for exactly that
+     conflict, not a shortcut: it guarantees `.hidden = true` always
+     actually hides the element, no matter what any other rule says. */
+  [hidden] { display: none !important; }
+
   /* Manual overrides for the Settings theme toggle — "System" (default)
      leaves the variables above alone, so it keeps following Telegram's
      live theme. Picking Light/Dark applies one of these instead. */
