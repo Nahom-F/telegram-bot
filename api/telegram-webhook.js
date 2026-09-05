@@ -46,6 +46,7 @@
 
 import mammoth from "mammoth";
 import { fetchWithTimeout } from "../lib/fetchWithTimeout.js";
+import { resizeImageIfNeeded } from "../lib/imageResize.js";
 import {
   isOwner,
   getOwnerChatId,
@@ -717,14 +718,18 @@ export default async function handler(req, res) {
     try {
       sendTypingAction(chatId); // fire-and-forget — already swallows its own errors
       const fileUrl = await getTelegramFileUrl(largest.file_id);
-      const { base64 } = await fetchAsBase64(fileUrl);
+      const resp = await fetchWithTimeout(fileUrl, {}, 12000);
+      if (!resp.ok) throw new Error(`Failed to download file: ${resp.status}`);
+      const arrayBuffer = await resp.arrayBuffer();
       // Telegram re-compresses every "photo" upload to JPEG server-side,
       // regardless of the original format — but its file-download server
       // doesn't reliably report that back in Content-Type. Trusting that
       // header was the actual bug: a wrong/generic mime type meant Gemini
       // couldn't decode the bytes as an image, and described the raw data
       // instead ("pasted as raw code"). Hardcoding it is more reliable.
-      const answer = await getVisionReply(question, base64, "image/jpeg");
+      const { buffer, mimeType } = await resizeImageIfNeeded(Buffer.from(arrayBuffer), "image/jpeg");
+      const base64 = buffer.toString("base64");
+      const answer = await getVisionReply(question, base64, mimeType);
       await sendTelegramMessage(chatId, answer);
     } catch (err) {
       console.error("Vision pipeline failed:", err.message);
@@ -788,8 +793,9 @@ export default async function handler(req, res) {
           } else {
             const prompt = `${question}\n\n--- Document text ---\n${docText.slice(0, 30000)}`;
             const { text: answer, tokensUsed } = await getAiReply(prompt);
-            await recordMessageUsage(chatId, tokensUsed);
-            await sendTelegramMessage(chatId, answer);
+            // Neither of these needs the other's result — running them
+            // concurrently instead of sequentially shaves a round trip.
+            await Promise.all([recordMessageUsage(chatId, tokensUsed), sendTelegramMessage(chatId, answer)]);
           }
         }
       } else if (mimeType.startsWith("text/") || lowerName.endsWith(".txt")) {
@@ -801,8 +807,7 @@ export default async function handler(req, res) {
         } else {
           const prompt = `${question}\n\n--- Document text ---\n${docText.slice(0, 30000)}`;
           const { text: answer, tokensUsed } = await getAiReply(prompt);
-          await recordMessageUsage(chatId, tokensUsed);
-          await sendTelegramMessage(chatId, answer);
+          await Promise.all([recordMessageUsage(chatId, tokensUsed), sendTelegramMessage(chatId, answer)]);
         }
       } else {
         // Old .doc, .pptx, .xlsx, etc. — not wired up yet.
@@ -836,8 +841,7 @@ export default async function handler(req, res) {
     const imagePrompt = imageMatch[2].trim();
     try {
       const { buffer, mimeType } = await askPollinationsImage(imagePrompt);
-      await sendTelegramPhoto(chatId, buffer, mimeType, imagePrompt);
-      await recordImageUsage(chatId);
+      await Promise.all([sendTelegramPhoto(chatId, buffer, mimeType, imagePrompt), recordImageUsage(chatId)]);
     } catch (err) {
       console.error("Image generation failed:", err.message);
       await sendTelegramMessage(chatId, `⚠️ Couldn't generate that image: ${err.message}`);
@@ -861,7 +865,6 @@ export default async function handler(req, res) {
 
   sendTypingAction(chatId); // fire-and-forget — already swallows its own errors
   const { text: reply, tokensUsed } = await getAiReply(text);
-  await recordMessageUsage(chatId, tokensUsed);
-  await sendTelegramMessage(chatId, reply);
+  await Promise.all([recordMessageUsage(chatId, tokensUsed), sendTelegramMessage(chatId, reply)]);
   res.status(200).send("OK");
 }

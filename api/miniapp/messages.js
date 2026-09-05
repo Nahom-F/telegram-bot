@@ -85,11 +85,10 @@ async function generateAndSaveImage(res, chat, userId, prompt) {
     })
     .returning();
 
-  await db.update(chats).set({ updatedAt: new Date() }).where(eq(chats.id, chat.id));
-  if (chat.title === "New chat") {
-    const autoTitle = prompt.length > 40 ? `${prompt.slice(0, 40)}…` : prompt;
-    await db.update(chats).set({ title: autoTitle }).where(eq(chats.id, chat.id));
-  }
+  const titleFields = chat.title === "New chat"
+    ? { title: prompt.length > 40 ? `${prompt.slice(0, 40)}…` : prompt }
+    : {};
+  await db.update(chats).set({ updatedAt: new Date(), ...titleFields }).where(eq(chats.id, chat.id));
 
   res.status(201).json(assistantMessage);
 }
@@ -127,15 +126,17 @@ export default async function handler(req, res) {
       res.status(400).json({ error: "chatId and content (or an attachment) are required" });
       return;
     }
-    const chat = await loadOwnedChat(Number(chatId), user.id);
+
+    // Neither of these needs the other's result, so run them concurrently
+    // instead of paying for two sequential round trips.
+    const [chat, limitCheck] = await Promise.all([
+      loadOwnedChat(Number(chatId), user.id),
+      checkMessageLimit(user.id),
+    ]);
     if (!chat) {
       res.status(404).json({ error: "Chat not found" });
       return;
     }
-
-    // Checked before spending an AI call, not after — no point burning a
-    // request just to refuse to show its result.
-    const limitCheck = await checkMessageLimit(user.id);
     if (!limitCheck.allowed) {
       res.status(429).json({ error: "rate_limited", message: limitCheck.reason });
       return;
@@ -228,16 +229,16 @@ export default async function handler(req, res) {
       .values({ chatId: chat.id, role: "assistant", content: visibleReply })
       .returning();
 
-    // Bumping updatedAt keeps the chat list sorted by most-recently-active.
-    await db.update(chats).set({ updatedAt: new Date() }).where(eq(chats.id, chat.id));
-
-    // Auto-title a brand-new chat from its first message, so the chat list
-    // doesn't just show a wall of identical "New chat" entries.
-    if (chat.title === "New chat") {
-      const titleSource = trimmedContent || attachmentName || "New chat";
-      const autoTitle = titleSource.length > 40 ? `${titleSource.slice(0, 40)}…` : titleSource;
-      await db.update(chats).set({ title: autoTitle }).where(eq(chats.id, chat.id));
-    }
+    // Bumping updatedAt keeps the chat list sorted by most-recently-active,
+    // and auto-titling a brand-new chat avoids a wall of identical "New
+    // chat" entries — combined into one UPDATE instead of two round trips.
+    const titleFields = chat.title === "New chat"
+      ? (() => {
+          const titleSource = trimmedContent || attachmentName || "New chat";
+          return { title: titleSource.length > 40 ? `${titleSource.slice(0, 40)}…` : titleSource };
+        })()
+      : {};
+    await db.update(chats).set({ updatedAt: new Date(), ...titleFields }).where(eq(chats.id, chat.id));
 
     res.status(201).json(assistantMessage);
     return;
