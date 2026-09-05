@@ -122,7 +122,7 @@ async function askGeminiVision(prompt, base64Image, mimeType) {
         },
       ],
     }),
-  }, 30000); // images/PDFs legitimately take a bit longer than plain text
+  }, 35000); // the real bottleneck for a complex image/PDF — rebalanced (was 30000, capped too tight against the 60s ceiling once file download time is added in)
   if (!resp.ok) throw new Error(`Gemini vision error ${resp.status}: ${await resp.text()}`);
   const data = await resp.json();
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -136,7 +136,7 @@ async function getTelegramFileUrl(fileId) {
   const resp = await fetchWithTimeout(
     `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`,
     {},
-    10000
+    8000
   );
   const data = await resp.json();
   if (!data.ok) throw new Error(`getFile failed: ${JSON.stringify(data)}`);
@@ -144,7 +144,7 @@ async function getTelegramFileUrl(fileId) {
 }
 
 async function fetchAsBase64(url) {
-  const resp = await fetchWithTimeout(url, {}, 20000);
+  const resp = await fetchWithTimeout(url, {}, 12000);
   if (!resp.ok) throw new Error(`Failed to download file: ${resp.status}`);
   const mimeType = resp.headers.get("content-type") || "image/jpeg";
   const arrayBuffer = await resp.arrayBuffer();
@@ -774,7 +774,7 @@ export default async function handler(req, res) {
       ) {
         // Gemini's inline_data doesn't accept .docx directly, so pull the
         // text out first with mammoth and send it as a normal text prompt.
-        const resp = await fetchWithTimeout(fileUrl, {}, 20000);
+        const resp = await fetchWithTimeout(fileUrl, {}, 12000);
         const arrayBuffer = await resp.arrayBuffer();
         const { value: docText } = await mammoth.extractRawText({
           buffer: Buffer.from(arrayBuffer),
@@ -793,7 +793,7 @@ export default async function handler(req, res) {
           }
         }
       } else if (mimeType.startsWith("text/") || lowerName.endsWith(".txt")) {
-        const resp = await fetchWithTimeout(fileUrl, {}, 20000);
+        const resp = await fetchWithTimeout(fileUrl, {}, 12000);
         const docText = await resp.text();
         const limitCheck = await checkMessageLimit(chatId);
         if (!limitCheck.allowed) {
